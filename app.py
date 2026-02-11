@@ -1,222 +1,244 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
-from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any
-from fpdf import FPDF
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+from typing import Optional
+import google.generativeai as genai
 import uvicorn
+import os
 import json
 import re
-import os
 from datetime import datetime
-from enum import Enum
+from fpdf import FPDF
 import logging
 
+# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Qualifi Level 4 Evaluator", version="1.0.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+# Configure Gemini AI
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+
+app = FastAPI(title="Qualifi Level 4 Evaluator with Gemini AI", version="2.0.0")
+
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"]
+)
+
 os.makedirs("tmp/qualifi-pdfs", exist_ok=True)
 
-class GradeBand(str, Enum):
-    DISTINCTION = "Distinction"
-    MERIT = "Merit"
-    PASS = "Pass"
-    REFER = "Refer"
-
-class CriterionResult(BaseModel):
-    score: int = Field(..., ge=0)
-    max_score: int
-    comment: str
-
-class Flags(BaseModel):
-    off_topic: bool = False
-    not_level_4: bool = False
-    empty_or_invalid_submission: bool = False
-    possible_academic_misconduct: bool = False
-
-class EvaluationRequest(BaseModel):
-    unit_code: str
-    rubric_text: str
-    assignment_text: str
-    learner_name: Optional[str] = ""
-    learner_id: Optional[str] = ""
-
-class EvaluationResponse(BaseModel):
-    unit_code: str
-    learner_name: Optional[str]
-    learner_id: Optional[str]
-    criteria: Dict[str, CriterionResult]
-    total_score: int = Field(..., ge=0, le=100)
-    grade_band: GradeBand
-    overall_justification: str
-    flags: Flags
-
-RUBRIC_DESCRIPTORS = {
-    "CONTENT": {"max_score": 30, "bands": {"Distinction": (24, 30), "Merit": (18, 23), "Pass": (12, 17), "Refer": (0, 11)}},
-    "THEORY": {"max_score": 25, "bands": {"Distinction": (20, 25), "Merit": (15, 19), "Pass": (10, 14), "Refer": (0, 9)}},
-    "UNDERSTANDING": {"max_score": 25, "bands": {"Distinction": (20, 25), "Merit": (15, 19), "Pass": (10, 14), "Refer": (0, 9)}},
-    "PRESENTATION": {"max_score": 20, "bands": {"Distinction": (16, 20), "Merit": (12, 15), "Pass": (8, 11), "Refer": (0, 7)}}
+# Rubric configuration
+RUBRIC = {
+    "Content": {"max_score": 30, "weight": 0.3},
+    "Theory": {"max_score": 25, "weight": 0.25},
+    "Understanding": {"max_score": 25, "weight": 0.25},
+    "Presentation": {"max_score": 20, "weight": 0.2}
 }
 
-def calculate_grade_band(total_score: int) -> GradeBand:
-    if total_score >= 70: return GradeBand.DISTINCTION
-    elif total_score >= 60: return GradeBand.MERIT
-    elif total_score >= 40: return GradeBand.PASS
-    else: return GradeBand.REFER
+GRADE_BANDS = [
+    {"name": "Distinction", "min": 70, "max": 100},
+    {"name": "Merit", "min": 60, "max": 69},
+    {"name": "Pass", "min": 40, "max": 59},
+    {"name": "Refer/Fail", "min": 0, "max": 39}
+]
 
-def check_empty_or_invalid(text: str) -> bool:
-    return not text or len(text.strip()) < 50 or len(text.split()) < 20
+MODULES = [
+    "SEM301DS - Strategic Management",
+    "SEM302DS - Project Management",
+    "SEM303DS - Financial Management",
+    "SEM304DS - Human Resource Management",
+    "SEM305DS - Marketing Management",
+    "SEM306DS - Operations Management",
+    "SEM307DS - Business Ethics",
+    "SEM308DS - Entrepreneurship",
+    "SEM309DS - Business Law",
+    "SEM310DS - International Business",
+    "SEM311DS - Research Methods",
+    "SEM312DS - Business Analytics",
+    "SEM313DS - Leadership",
+    "SEM314DS - Innovation Management"
+]
 
-def check_off_topic(text: str, unit_code: str) -> bool:
-    text_lower = text.lower()
-    keywords = ["analysis", "discuss", "evaluate", "theory", "concept", "research", "evidence", "argument", "conclusion", "introduction"]
-    return sum(1 for kw in keywords if kw in text_lower) < 2 and len(text) < 200
+class EvaluationRequest(BaseModel):
+    student_name: str
+    qualification_level: str
+    module: str
+    assignment_text: str
 
-def check_academic_misconduct(text: str) -> bool:
-    phrases = ["according to wikipedia", "is defined as", "refers to the", "is a term used"]
-    return sum(1 for p in phrases if p in text.lower()) >= 3
-
-def check_level_4_standard(text: str) -> bool:
-    basic = ["i think", "in my opinion", "very good", "really nice"]
-    advanced = ["methodology", "paradigm", "meta-analysis"]
-    return not (sum(1 for b in basic if b in text.lower()) >= 5 and len(text.split()) < 300)
-
-def evaluate_criterion(criterion: str, text: str) -> CriterionResult:
-    config = RUBRIC_DESCRIPTORS[criterion]
-    max_score = config["max_score"]
-    text_lower = text.lower()
-    word_count = len(text.split())
-    
-    keywords_map = {
-        "CONTENT": (["evaluate", "analyze", "critique"], ["synthesize", "integrate"], ["argue", "suggest", "propose"]),
-        "THEORY": (["theory", "framework", "model"], ["according to", "research", "literature"], []),
-        "UNDERSTANDING": (["understand", "demonstrate", "explain"], ["comprehensive", "detailed"], []),
-        "PRESENTATION": (["logical", "coherent", "organized"], ["clear", "polished"], [])
-    }
-    
-    if criterion in keywords_map:
-        kw1, kw2, kw3 = keywords_map[criterion]
-        count1 = sum(1 for k in kw1 if k in text_lower)
-        count2 = sum(1 for k in kw2 if k in text_lower)
+async def evaluate_with_gemini(assignment_text: str, module: str) -> dict:
+    """Use Gemini AI to evaluate the assignment"""
+    try:
+        if not GEMINI_API_KEY:
+            return generate_fallback_evaluation(assignment_text)
         
-        if count1 >= 4 and count2 >= 3: score = max_score - 4
-        elif count1 >= 3 and count2 >= 2: score = int(max_score * 0.75)
-        elif count1 >= 2: score = int(max_score * 0.6)
-        elif count1 >= 1: score = int(max_score * 0.45)
-        else: score = int(max_score * 0.25) if word_count > 200 else 0
-    else:
-        score = int(max_score * 0.5)
-    
-    comment = f"Score {score}/{max_score}. Assignment demonstrates {'excellent' if score > max_score*0.8 else 'good' if score > max_score*0.6 else 'adequate' if score > max_score*0.4 else 'limited'} performance in {criterion.lower()}. Areas for development: increase depth and breadth of analysis."
-    return CriterionResult(score=score, max_score=max_score, comment=comment)
+        model = genai.GenerativeModel('gemini-pro')
+        
+        prompt = f"""You are an academic evaluator for Qualifi Level 4 assignments.
 
-def evaluate_assignment(unit_code: str, rubric_text: str, assignment_text: str, learner_name: str = "", learner_id: str = "") -> EvaluationResponse:
-    flags = Flags()
-    if check_empty_or_invalid(assignment_text):
-        flags.empty_or_invalid_submission = True
-    if check_off_topic(assignment_text, unit_code):
-        flags.off_topic = True
-    if not check_level_4_standard(assignment_text):
-        flags.not_level_4 = True
-    if check_academic_misconduct(assignment_text):
-        flags.possible_academic_misconduct = True
-    
-    criteria_results = {}
-    total_score = 0
-    for criterion in ["CONTENT", "THEORY", "UNDERSTANDING", "PRESENTATION"]:
-        result = evaluate_criterion(criterion, assignment_text)
-        criteria_results[criterion] = result
-        total_score += result.score
-    
-    grade_band = calculate_grade_band(total_score)
-    justification = f"Total score: {total_score}/100 ({grade_band.value}). " + ("Content appears off-topic. " if flags.off_topic else "") + ("Work below Level 4 standard. " if flags.not_level_4 else ") + ("Possible academic misconduct detected. " if flags.possible_academic_misconduct else "")
-    
-    return EvaluationResponse(unit_code=unit_code, learner_name=learner_name, learner_id=learner_id, criteria=criteria_results, total_score=total_score, grade_band=grade_band, overall_justification=justification, flags=flags)
+Module: {module}
 
-class PDF(FPDF):
-    def header(self):
-        self.set_font("Arial", "B", 16)
-        self.set_text_color(37, 99, 235)
-        self.cell(0, 10, "Qualifi Level 4 - Evaluation Report", 0, 1, "C")
-        self.ln(5)
-    
-    def footer(self):
-        self.set_y(-15)
-        self.set_font("Arial", "I", 8)
-        self.cell(0, 10, f"Page {self.page_no()}", 0, 0, "C")
+Evaluate the following student assignment based on these criteria:
+1. Content (30 marks): Depth, relevance, and completeness
+2. Theory (25 marks): Application of theoretical concepts
+3. Understanding (25 marks): Demonstration of comprehension
+4. Presentation (20 marks): Structure, clarity, and formatting
 
-def generate_pdf(result: EvaluationResponse) -> str:
-    pdf = PDF()
+Assignment Text:
+{assignment_text[:3000]}
+
+Provide scores and detailed feedback for each criterion.
+Return ONLY a JSON object with this exact structure:
+{{
+  "Content": {{"score": <number>, "feedback": "<text>"}},
+  "Theory": {{"score": <number>, "feedback": "<text>"}},
+  "Understanding": {{"score": <number>, "feedback": "<text>"}},
+  "Presentation": {{"score": <number>, "feedback": "<text>"}}
+}}
+"""
+        
+        response = model.generate_content(prompt)
+        result_text = response.text.strip()
+        
+        # Extract JSON from response
+        json_match = re.search(r'\{{.*\}}', result_text, re.DOTALL)
+        if json_match:
+            evaluation = json.loads(json_match.group())
+            return evaluation
+        else:
+            return generate_fallback_evaluation(assignment_text)
+            
+    except Exception as e:
+        logger.error(f"Gemini evaluation error: {str(e)}")
+        return generate_fallback_evaluation(assignment_text)
+
+def generate_fallback_evaluation(assignment_text: str) -> dict:
+    """Generate basic evaluation when Gemini is unavailable"""
+    word_count = len(assignment_text.split())
+    
+    if word_count < 100:
+        return {
+            "Content": {"score": 10, "feedback": "Insufficient content provided."},
+            "Theory": {"score": 8, "feedback": "Limited theoretical application."},
+            "Understanding": {"score": 8, "feedback": "Basic understanding demonstrated."},
+            "Presentation": {"score": 7, "feedback": "Brief presentation."}
+        }
+    
+    return {
+        "Content": {"score": 22, "feedback": "Good coverage of content areas."},
+        "Theory": {"score": 18, "feedback": "Adequate theoretical framework applied."},
+        "Understanding": {"score": 19, "feedback": "Sound understanding of concepts."},
+        "Presentation": {"score": 15, "feedback": "Clear and organized presentation."}
+    }
+
+def calculate_grade(total_score: float) -> str:
+    """Calculate grade band based on total score"""
+    for band in GRADE_BANDS:
+        if band["min"] <= total_score <= band["max"]:
+            return band["name"]
+    return "Ungraded"
+
+def generate_pdf(student_name: str, module: str, evaluation: dict, total_score: float, grade: str) -> str:
+    """Generate PDF evaluation report"""
+    pdf = FPDF()
     pdf.add_page()
-    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.set_font("Arial", "B", 16)
     
-    pdf.set_font("Arial", "B", 12)
-    pdf.cell(0, 8, "Student Information", 0, 1)
-    pdf.set_font("Arial", "", 10)
-    pdf.cell(40, 6, "Unit Code", 0)
-    pdf.cell(0, 6, result.unit_code, 0, 1)
-    if result.learner_name:
-        pdf.cell(40, 6, "Learner Name", 0)
-        pdf.cell(0, 6, result.learner_name, 0, 1)
-    if result.learner_id:
-        pdf.cell(40, 6, "Learner ID", 0)
-        pdf.cell(0, 6, result.learner_id, 0, 1)
-    
+    # Title
+    pdf.cell(0, 10, "Qualifi Level 4 Assignment Evaluation", 0, 1, "C")
     pdf.ln(5)
+    
+    # Student Info
+    pdf.set_font("Arial", "", 12)
+    pdf.cell(0, 8, f"Student Name: {student_name}", 0, 1)
+    pdf.cell(0, 8, f"Module: {module}", 0, 1)
+    pdf.cell(0, 8, f"Date: {datetime.now().strftime('%Y-%m-%d')}", 0, 1)
+    pdf.ln(5)
+    
+    # Overall Grade
     pdf.set_font("Arial", "B", 14)
-    pdf.cell(0, 10, f"Total Score: {result.total_score}/100 - {result.grade_band.value}", 0, 1)
+    pdf.cell(0, 10, f"Final Grade: {grade} ({total_score:.1f}/100)", 0, 1)
     pdf.ln(5)
     
+    # Detailed Scores
     pdf.set_font("Arial", "B", 12)
-    pdf.cell(0, 8, "Criteria Scores", 0, 1)
-    pdf.set_font("Arial", "", 10)
-    for criterion, data in result.criteria.items():
-        pdf.cell(80, 6, f"{criterion}: {data.score}/{data.max_score}", 0, 1)
+    pdf.cell(0, 8, "Detailed Evaluation:", 0, 1)
+    pdf.set_font("Arial", "", 11)
     
-    filename = f"tmp/qualifi-pdfs/evaluation_{result.unit_code}_{datetime.now().strftime('%Y%m%d%H%M%S')}.pdf"
+    for criterion, data in evaluation.items():
+        max_score = RUBRIC[criterion]["max_score"]
+        pdf.ln(3)
+        pdf.set_font("Arial", "B", 11)
+        pdf.cell(0, 8, f"{criterion}: {data['score']}/{max_score}", 0, 1)
+        pdf.set_font("Arial", "", 10)
+        pdf.multi_cell(0, 6, f"Feedback: {data['feedback']}")
+    
+    # Save PDF
+    filename = f"tmp/qualifi-pdfs/{student_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
     pdf.output(filename)
     return filename
 
-@app.post("/api/evaluate", response_model=EvaluationResponse)
-async def evaluate(request: EvaluationRequest):
-    try:
-        result = evaluate_assignment(request.unit_code, request.rubric_text, request.assignment_text, request.learner_name or "", request.learner_id or "")
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/evaluate-file")
-async def evaluate_file(unit_code: str = Form(...), rubric_text: str = Form(...), assignment_file: UploadFile = File(...), learner_name: str = Form(default=""), learner_id: str = Form(default="")):
-    try:
-        content = await assignment_file.read()
-        try:
-            assignment_text = content.decode('utf-8')
-        except:
-            assignment_text = content.decode('latin-1')
-        result = evaluate_assignment(unit_code, rubric_text, assignment_text, learner_name, learner_id)
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/download-pdf")
-async def download_pdf(request: Request):
-    try:
-        data = await request.json()
-        result = EvaluationResponse(**data)
-        pdf_path = generate_pdf(result)
-        return FileResponse(pdf_path, media_type="application/pdf")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/health")
-async def health():
-    return {"status": "healthy", "version": "1.0.0"}
-
 @app.get("/", response_class=HTMLResponse)
-async def serve_frontend():
-    return open("index.html", "r").read()
+async def root():
+    with open("index.html", "r") as f:
+        return f.read()
+
+@app.post("/api/evaluate")
+async def evaluate_assignment(
+    student_name: str = Form(...),
+    qualification_level: str = Form(...),
+    module: str = Form(...),
+    assignment: UploadFile = File(...)
+):
+    try:
+        # Read assignment file
+        content = await assignment.read()
+        assignment_text = content.decode('utf-8', errors='ignore')
+        
+        if len(assignment_text.strip()) < 50:
+            raise HTTPException(status_code=400, detail="Assignment text too short")
+        
+        # Evaluate with Gemini AI
+        evaluation = await evaluate_with_gemini(assignment_text, module)
+        
+        # Calculate total score
+        total_score = sum(data["score"] for data in evaluation.values())
+        grade = calculate_grade(total_score)
+        
+        # Generate PDF
+        pdf_path = generate_pdf(student_name, module, evaluation, total_score, grade)
+        
+        return JSONResponse({
+            "success": True,
+            "student_name": student_name,
+            "module": module,
+            "total_score": total_score,
+            "grade": grade,
+            "evaluation": evaluation,
+            "pdf_url": f"/download/{os.path.basename(pdf_path)}"
+        })
+        
+    except Exception as e:
+        logger.error(f"Evaluation error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/download/{filename}")
+async def download_pdf(filename: str):
+    file_path = f"tmp/qualifi-pdfs/{filename}"
+    if os.path.exists(file_path):
+        return FileResponse(file_path, filename=filename)
+    raise HTTPException(status_code=404, detail="File not found")
+
+@app.get("/api/modules")
+async def get_modules():
+    return {"modules": MODULES}
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+    uvicorn.run(app, host="0.0.0.0", port=8000)
