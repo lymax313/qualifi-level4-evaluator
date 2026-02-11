@@ -70,8 +70,12 @@ Evaluate the assignment strictly according to the rubric provided. Generate a de
 2. For each Learning Outcome, identify its Assessment Criteria
 3. For each Assessment Criterion, determine:
    - Is it Achieved (Y) or Not Yet Achieved (N)?
-   - Provide detailed evidence-based feedback (3-5 sentences minimum)
-
+   - Provide comprehensive, detailed feedback for each criterion (minimum 4-6 sentences):
+      * Quote or reference specific content from the student's assignment
+      * Explain what the student did well or what was missing
+      * Relate the feedback to Qualifi Level 4 expectations
+      * Provide constructive suggestions for improvement if not achieved
+      * Use professional academic language and be specific with examples
 Return ONLY valid JSON in this exact format:
 {{
   "learning_outcomes": [
@@ -95,6 +99,9 @@ IMPORTANT:
 - Reference actual content from the assignment
 - Explain clearly why each criterion was achieved or not
 - Overall feedback should be comprehensive (5-7 sentences)
+   - Include strengths and areas for improvement for each criterion
+   - Use evidence from rubric learning outcomes and assessment criteria
+   - Provide actionable recommendations for student development
 """
         
         response = model.generate_content(prompt)
