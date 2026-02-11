@@ -1,0 +1,66 @@
+<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width"><title>Qualifi Level 4 Evaluator</title><script src="https://cdn.tailwindcss.com"></script></head><body class="bg-gray-50"><div class="max-w-4xl mx-auto p-6"><h1 class="text-3xl font-bold mb-2">Qualifi Level 4 Assignment Evaluator</h1><p class="text-gray-600 mb-6">AI-assisted evaluation platform with rubric-based scoring</p><div class="bg-white rounded-lg shadow p-6 mb-6"><h2 class="text-xl font-bold mb-4">📋 Evaluation Form</h2><form id="evalForm"><div class="grid grid-cols-3 gap-4 mb-4"><div><label class="block font-medium mb-2">Unit Code (e.g., SEM301DS)</label><input type="text" id="unitCode" class="w-full border p-2 rounded" required></div><div><label class="block font-medium mb-2">Student Name</label><input type="text" id="learnerName" class="w-full border p-2 rounded"></div><div><label class="block font-medium mb-2">Student ID</label><input type="text" id="learnerId" class="w-full border p-2 rounded"></div></div><div class="mb-4"><label class="block font-medium mb-2">Rubric Text</label><textarea id="rubricText" rows="4" class="w-full border p-2 rounded" placeholder="Paste rubric here..." required></textarea></div><div class="mb-4"><label class="block font-medium mb-2">Assignment Text</label><textarea id="assignmentText" rows="8" class="w-full border p-2 rounded" placeholder="Paste assignment text here..." required></textarea></div><button type="submit" class="bg-blue-600 text-white px-6 py-2 rounded font-medium">Evaluate Assignment</button></form></div><div id="results" class="hidden"><div class="bg-green-50 border border-green-200 rounded-lg p-6"><h2 class="text-2xl font-bold mb-4">📊 Evaluation Results</h2><div id="resultContent"></div><button onclick="downloadPDF()" class="bg-red-600 text-white px-6 py-2 rounded font-medium mt-4">Download PDF</button></div></div></div><script>
+let currentResult = null;
+document.getElementById('evalForm').addEventListener('submit', async (e) => {
+e.preventDefault();
+const unitCode = document.getElementById('unitCode').value;
+const rubricText = document.getElementById('rubricText').value;
+const assignmentText = document.getElementById('assignmentText').value;
+const learnerName = document.getElementById('learnerName').value;
+const learnerId = document.getElementById('learnerId').value;
+try {
+const response = await fetch('/api/evaluate', {
+method: 'POST',
+headers: {'Content-Type': 'application/json'},
+body: JSON.stringify({unit_code: unitCode, rubric_text: rubricText, assignment_text: assignmentText, learner_name: learnerName, learner_id: learnerId})
+});
+const result = await response.json();
+currentResult = result;
+displayResults(result);
+} catch (err) {
+alert('Error: ' + err.message);
+}
+});
+function displayResults(result) {
+const html = `
+<div class="mb-4">
+<p><strong>Unit:</strong> ${result.unit_code}</p>
+<p><strong>Student:</strong> ${result.learner_name || 'N/A'} (${result.learner_id || 'N/A'})</p>
+</div>
+<div class="bg-white p-4 rounded mb-4">
+<h3 class="text-xl font-bold mb-2">Total Score: ${result.total_score}/100</h3>
+<h3 class="text-lg font-bold text-${getGradeColor(result.grade_band)}">Grade: ${result.grade_band}</h3>
+</div>
+<div class="mb-4">
+<h3 class="font-bold mb-2">Criteria Breakdown:</h3>
+${Object.entries(result.criteria).map(([k, v]) => `<div class="bg-blue-50 p-3 mb-2 rounded"><strong>${k}:</strong> ${v.score}/${v.max_score}<br><small>${v.comment}</small></div>`).join('')}
+</div>
+<div class="bg-gray-50 p-4 rounded">
+<strong>Overall Feedback:</strong><p>${result.overall_justification}</p>
+</div>
+`;
+document.getElementById('resultContent').innerHTML = html;
+document.getElementById('results').classList.remove('hidden');
+}
+function getGradeColor(grade) {
+const colors = {'Distinction': 'green-700', 'Merit': 'blue-700', 'Pass': 'yellow-700', 'Refer': 'red-700'};
+return colors[grade] || 'gray-700';
+}
+async function downloadPDF() {
+if (!currentResult) return;
+try {
+const response = await fetch('/api/download-pdf', {
+method: 'POST',
+headers: {'Content-Type': 'application/json'},
+body: JSON.stringify(currentResult)
+});
+const blob = await response.blob();
+const url = window.URL.createObjectURL(blob);
+const a = document.createElement('a');
+a.href = url;
+a.download = `evaluation_${currentResult.unit_code}_${new Date().toISOString().slice(0,10)}.pdf`;
+a.click();
+} catch (err) {
+alert('PDF download error: ' + err.message);
+}
+}
+</script></body></html>
