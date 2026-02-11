@@ -17,6 +17,291 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
+app = FastAPI(title="Qualifi Level 4 Evaluator", version="4.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"]
+)
+
+os.makedirs("tmp/qualifi-pdfs", exist_ok=True)
+
+MODULES = [
+    "SEM301DS - Strategic Management",
+    "SEM302DS - Project Management",
+    "SEM303DS - Financial Management",
+    "SEM304DS - Human Resource Management",
+    "SEM305DS - Marketing Management",
+    "SEM306DS - Operations Management",
+    "SEM307DS - Business Ethics",
+    "SEM308DS - Entrepreneurship",
+    "SEM309DS - Business Law",
+    "SEM310DS - International Business",
+    "SEM311DS - Research Methods",
+    "SEM312DS - Business Analytics",
+    "SEM313DS - Leadership",
+    "SEM314DS - Innovation Management"
+]
+
+async def evaluate_with_gemini(rubric_text: str, assignment_text: str, module: str) -> dict:
+    """Optimized Gemini AI evaluation with detailed feedback following Result-format template"""
+    try:
+        if not GEMINI_API_KEY:
+            return generate_fallback_evaluation()
+        
+        model = genai.GenerativeModel('gemini-pro')
+        
+        prompt = f"""You are an academic evaluator following the Qualifi Level 4 assessment framework.
+
+Module: {module}
+
+RUBRIC/ASSESSMENT CRITERIA:
+{rubric_text[:3000]}
+
+STUDENT ASSIGNMENT:
+{assignment_text[:4000]}
+
+Evaluate the assignment strictly according to the rubric provided. Generate a detailed evaluation report following this EXACT structure:
+
+1. Extract all Learning Outcomes from the rubric
+2. For each Learning Outcome, identify its Assessment Criteria
+3. For each Assessment Criterion, determine:
+   - Is it Achieved (Y) or Not Yet Achieved (N)?
+   - Provide detailed evidence-based feedback (3-5 sentences minimum)
+
+Return ONLY valid JSON in this exact format:
+{{
+  "learning_outcomes": [
+    {{
+      "outcome": "<Learning Outcome text>",
+      "criteria": [
+        {{
+          "criterion": "<Assessment Criteria text>",
+          "achieved": "Y" or "N",
+          "evidence": "<Detailed feedback explaining why achieved or not achieved, with specific examples from the submission>"
+        }}
+      ]
+    }}
+  ],
+  "overall_feedback": "<Overall performance assessment>",
+  "overall_grade": "<Pass/Merit/Distinction/Refer>"
+}}
+
+IMPORTANT:
+- Be specific and detailed in evidence feedback
+- Reference actual content from the assignment
+- Explain clearly why each criterion was achieved or not
+- Overall feedback should be comprehensive (5-7 sentences)
+"""
+        
+        response = model.generate_content(prompt)
+        result_text = response.text.strip()
+        
+        # Extract JSON from response
+        json_match = re.search(r'\{.*\}', result_text, re.DOTALL)
+        if json_match:
+            evaluation = json.loads(json_match.group())
+            return evaluation
+        else:
+            logger.warning("Could not extract JSON from Gemini response")
+            return generate_fallback_evaluation()
+            
+    except Exception as e:
+        logger.error(f"Gemini evaluation error: {str(e)}")
+        return generate_fallback_evaluation()
+
+def generate_fallback_evaluation() -> dict:
+    """Fallback evaluation when Gemini is unavailable"""
+    return {
+        "learning_outcomes": [
+            {
+                "outcome": "Demonstrate understanding of core concepts",
+                "criteria": [
+                    {
+                        "criterion": "Explain fundamental principles",
+                        "achieved": "N",
+                        "evidence": "Unable to evaluate - Gemini AI unavailable. Manual assessment required."
+                    }
+                ]
+            }
+        ],
+        "overall_feedback": "Automated evaluation unavailable. Please review manually.",
+        "overall_grade": "Pending Review"
+    }
+
+def generate_pdf_result_format(student_name: str, student_id: str, module: str, unit_title: str, evaluation: dict) -> str:
+    """Generate PDF following Result-format.pdf template structure"""
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    
+    # Title
+    pdf.set_font("Arial", "B", 16)
+    pdf.cell(0, 10, "Presentation Feedback", 0, 1, "C")
+    pdf.ln(5)
+    
+    # Student Information
+    pdf.set_font("Arial", "", 11)
+    pdf.cell(50, 7, "Learner Name:", 0, 0)
+    pdf.set_font("Arial", "B", 11)
+    pdf.cell(0, 7, student_name, 0, 1)
+    
+    pdf.set_font("Arial", "", 11)
+    pdf.cell(50, 7, "Learner Registration ID:", 0, 0)
+    pdf.set_font("Arial", "B", 11)
+    pdf.cell(0, 7, student_id, 0, 1)
+    
+    pdf.set_font("Arial", "", 11)
+    pdf.cell(50, 7, "Qualification:", 0, 0)
+    pdf.set_font("Arial", "B", 11)
+    pdf.cell(0, 7, "L4", 0, 1)
+    
+    pdf.set_font("Arial", "", 11)
+    pdf.cell(50, 7, "Unit Title:", 0, 0)
+    pdf.set_font("Arial", "B", 11)
+    pdf.cell(0, 7, unit_title, 0, 1)
+    
+    pdf.set_font("Arial", "", 11)
+    pdf.cell(50, 7, "Assignment submitted:", 0, 0)
+    pdf.set_font("Arial", "B", 11)
+    pdf.cell(0, 7, "Yes", 0, 1)
+    pdf.ln(5)
+    
+    # Table Header
+    pdf.set_font("Arial", "B", 9)
+    pdf.set_fill_color(220, 220, 220)
+    pdf.cell(60, 8, "Learning Outcomes", 1, 0, "C", True)
+    pdf.cell(50, 8, "Assessment Criteria", 1, 0, "C", True)
+    pdf.cell(10, 8, "A", 1, 0, "C", True)
+    pdf.cell(10, 8, "NYA", 1, 0, "C", True)
+    pdf.cell(60, 8, "Evidence", 1, 1, "C", True)
+    
+    # Table Content
+    pdf.set_font("Arial", "", 8)
+    for lo in evaluation.get("learning_outcomes", []):
+        outcome_text = lo.get("outcome", "")[:80]
+        criteria_list = lo.get("criteria", [])
+        
+        for idx, criterion in enumerate(criteria_list):
+            crit_text = criterion.get("criterion", "")[:60]
+            achieved = criterion.get("achieved", "N")
+            evidence = criterion.get("evidence", "")[:150]
+            
+            # Calculate row height based on content
+            row_height = max(12, len(evidence) // 30 * 4)
+            
+            if idx == 0:
+                pdf.cell(60, row_height, outcome_text, 1, 0)
+            else:
+                pdf.cell(60, row_height, "", 1, 0)
+            
+            pdf.cell(50, row_height, crit_text, 1, 0)
+            pdf.cell(10, row_height, "Y" if achieved == "Y" else "", 1, 0, "C")
+            pdf.cell(10, row_height, "N" if achieved == "N" else "", 1, 0, "C")
+            pdf.multi_cell(60, 4, evidence, 1)
+    
+    pdf.ln(5)
+    
+    # Overall Feedback
+    pdf.set_font("Arial", "B", 11)
+    pdf.cell(0, 8, "Overall Feedback", 0, 1)
+    pdf.set_font("Arial", "", 10)
+    pdf.multi_cell(0, 6, evaluation.get("overall_feedback", "No feedback provided"))
+    pdf.ln(3)
+    
+    # Overall Grade
+    pdf.set_font("Arial", "B", 12)
+    pdf.set_fill_color(240, 240, 240)
+    pdf.cell(0, 10, f"Overall Grade: {evaluation.get('overall_grade', 'Pending')}", 1, 1, "C", True)
+    
+    # Save PDF
+    filename = f"tmp/qualifi-pdfs/{student_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    pdf.output(filename)
+    return filename
+
+@app.get("/", response_class=HTMLResponse)
+async def root():
+    with open("index.html", "r") as f:
+        return f.read()
+
+@app.post("/api/evaluate")
+async def evaluate_assignment(
+    student_name: str = Form(...),
+    student_id: str = Form(...),
+    module: str = Form(...),
+    unit_title: str = Form(...),
+    rubric: UploadFile = File(...),
+    assignment: UploadFile = File(...)
+):
+    try:
+        # Read rubric file
+        rubric_content = await rubric.read()
+        rubric_text = rubric_content.decode('utf-8', errors='ignore')
+        
+        if len(rubric_text.strip()) < 20:
+            raise HTTPException(status_code=400, detail="Rubric file is too short or empty")
+        
+        # Read assignment file
+        assignment_content = await assignment.read()
+        assignment_text = assignment_content.decode('utf-8', errors='ignore')
+        
+        if len(assignment_text.strip()) < 50:
+            raise HTTPException(status_code=400, detail="Assignment text too short")
+        
+        # Evaluate with Gemini AI
+        evaluation = await evaluate_with_gemini(rubric_text, assignment_text, module)
+        
+        # Generate PDF report
+        pdf_path = generate_pdf_result_format(student_name, student_id, module, unit_title, evaluation)
+        
+        return JSONResponse({
+            "success": True,
+            "student_name": student_name,
+            "student_id": student_id,
+            "module": module,
+            "unit_title": unit_title,
+            "evaluation": evaluation,
+            "pdf_url": f"/download/{os.path.basename(pdf_path)}"
+        })
+        
+    except Exception as e:
+        logger.error(f"Evaluation error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/download/{filename}")
+async def download_pdf(filename: str):
+    file_path = f"tmp/qualifi-pdfs/{filename}"
+    if os.path.exists(file_path):
+        return FileResponse(file_path, filename=filename)
+    raise HTTPException(status_code=404, detail="File not found")
+
+@app.get("/api/modules")
+async def get_modules():
+    return {"modules": MODULES}
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+import google.generativeai as genai
+import uvicorn
+import os
+import json
+import re
+from datetime import datetime
+from fpdf import FPDF
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+
 app = FastAPI(title="Qualifi Level 4 Evaluator", version="3.0.0")
 
 app.add_middleware(
