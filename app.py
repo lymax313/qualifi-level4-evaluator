@@ -9,8 +9,6 @@ import re
 from datetime import datetime
 from fpdf import FPDF
 import logging
-from PIL import Image
-import io
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
