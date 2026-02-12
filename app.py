@@ -9,12 +9,14 @@ from datetime import datetime
 from fpdf import FPDF
 import logging
 
-def sanitize_text(text: str) -> str:
-    # Replace characters not supported by core fonts with a safe placeholder
-    return text.encode("latin-1", "replace").decode("latin-1")
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def sanitize_text(text: str) -> str:
+    """Replace characters not supported by core fonts with safe placeholders."""
+    return text.encode("latin-1", "replace").decode("latin-1")
+
 
 app = FastAPI(title="Qualifi Level 4 Evaluator", version="6.0.0")
 
@@ -165,7 +167,9 @@ def evaluate_locally(assignment_text: str, rubric_text: str | None, unit_title: 
 
     # Content & knowledge – more words => higher scores (up to max)
     content_score = min(QUALIFI_RUBRIC["Content"], int(word_count / 40))
-    knowledge_score = min(QUALIFI_RUBRIC["Knowledge and Understanding"], int(word_count / 40))
+    knowledge_score = min(
+        QUALIFI_RUBRIC["Knowledge and Understanding"], int(word_count / 40)
+    )
 
     # Application of theory – count basic theoretical keywords
     theory_keywords = ["theory", "model", "framework", "research", "study", "literature"]
@@ -250,7 +254,9 @@ def evaluate_locally(assignment_text: str, rubric_text: str | None, unit_title: 
             f"{area}: {mark_breakdown[area]['justification']}" for area in strengths
         ]
     else:
-        strengths_text = ["No particular strengths were identified; all areas require further development."]
+        strengths_text = [
+            "No particular strengths were identified; all areas require further development."
+        ]
 
     if improvements:
         improvements_text = [
@@ -286,127 +292,6 @@ def generate_pdf(student_name: str, student_id: str, unit_title: str, evaluation
 
     # Header
     pdf.set_font("Arial", "B", 16)
-    pdf.cell(0, 10, "QUALIFI LEVEL 4 DIPLOMA IN AI - EVALUATION REPORT", 0, 1, "C")
-    pdf.ln(5)
-
-    # Student info
-    pdf.set_font("Arial", "", 11)
-    pdf.cell(100, 7, f"Student Name: {student_name}", 0, 0)
-    pdf.cell(0, 7, f"Student ID: {student_id}", 0, 1)
-    pdf.cell(0, 7, f"Unit: {unit_title}", 0, 1)
-    pdf.cell(0, 7, f"Date: {datetime.now().strftime('%Y-%m-%d')}", 0, 1)
-    pdf.ln(5)
-
-    # Overall grade band
-    pdf.set_font("Arial", "B", 14)
-    pdf.set_fill_color(220, 235, 255)
-    grade = evaluation.get("grade", "N/A")
-    score = evaluation.get("total_score", 0)
-    perc = evaluation.get("percentage", 0)
-    pdf.cell(
-        0,
-        12,
-        f"FINAL GRADE: {grade} | SCORE: {score}/220 ({perc}%)",
-        1,
-        1,
-        "C",
-        True,
-    )
-    pdf.ln(5)
-
-    # Mark scheme breakdown
-    pdf.set_font("Arial", "B", 12)
-    pdf.cell(0, 8, "1. MARK SCHEME BREAKDOWN", 0, 1)
-    pdf.set_font("Arial", "", 10)
-
-    breakdown = evaluation.get("mark_breakdown", {})
-    for crit, data in breakdown.items():
-        max_s = QUALIFI_RUBRIC.get(crit, 0)
-        s = data.get("score", 0)
-        pdf.set_font("Arial", "B", 10)
-        pdf.cell(0, 6, f"{crit} ({s}/{max_s})", 0, 1)
-        pdf.set_font("Arial", "", 9)
-        pdf.multi_cell(0, 5, data.get("justification", ""))
-        pdf.ln(2)
-
-    # Criteria feedback
-    pdf.ln(3)
-    pdf.set_font("Arial", "B", 12)
-    pdf.cell(0, 8, "2. ASSESSMENT CRITERIA FEEDBACK", 0, 1)
-
-    for item in evaluation.get("criteria_feedback", []):
-        pdf.set_font("Arial", "B", 10)
-        crit_text = item.get("criterion", "N/A")
-        status = "[ACHIEVED]" if item.get("achieved") else "[NOT ACHIEVED]"
-        pdf.multi_cell(0, 6, f"{status} {crit_text}")
-        pdf.set_font("Arial", "I", 9)
-        pdf.multi_cell(0, 5, f"Evidence: {item.get('evidence', 'N/A')}")
-        pdf.set_font("Arial", "", 9)
-        pdf.multi_cell(0, 5, f"Improvement: {item.get('improvement', 'N/A')}")
-        pdf.ln(2)
-
-    # Overall feedback
-    pdf.ln(3)
-    pdf.set_font("Arial", "B", 12)
-    pdf.cell(0, 8, "3. OVERALL EVALUATION", 0, 1)
-    pdf.set_font("Arial", "", 10)
-    pdf.multi_cell(0, 6, evaluation.get("overall_feedback", "N/A"))
-
-    # Strengths and improvements
-    pdf.ln(3)
-    pdf.set_font("Arial", "B", 11)
-    pdf.cell(0, 6, "Key Strengths:", 0, 1)
-    pdf.set_font("Arial", "", 10)
-    for s in evaluation.get("strengths", []):
-        pdf.multi_cell(0, 5, f"- {s}")
-    pdf.ln(2)
-
-    pdf.set_font("Arial", "B", 11)
-    pdf.cell(0, 6, "Areas for Improvement:", 0, 1)
-    pdf.set_font("Arial", "", 10)
-    for i in evaluation.get("improvements", []):
-        pdf.multi_cell(0, 5, f"- {i}")
-
-    filename = f"tmp/qualifi-pdfs/{student_id}_{datetime.now().strftime('%Y%m%d%H%M')}.pdf"
-    pdf.output(filename)
-    return filename
-
-
-pdf.cell(100, 7, sanitize_text(f"Student Name: {student_name}"), 0, 0)
-pdf.cell(0, 7, sanitize_text(f"Student ID: {student_id}"), 0, 1)
-pdf.cell(0, 7, sanitize_text(f"Unit: {unit_title}"), 0, 1)
-
-...
-
-pdf.multi_cell(0, 5, sanitize_text(data.get("justification", "")))
-
-...
-
-pdf.multi_cell(0, 6, sanitize_text(evaluation.get("overall_feedback", "N/A")))
-
-...
-
-def generate_pdf(student_name: str, student_id: str, unit_title: str, evaluation: dict) -> str:
-    pdf = FPDF()
-    pdf.add_page()
-
-    # Header
-    pdf.set_font("Arial", "B", 16)
-    pdf.cell(
-        0,
-        10,
-        sanitize_text("QUALIFI LEVEL 4 DIPLOMA IN AI - EVALUATION REPORT"),
-        0,
-        1,
-        "C",
-    )
-    ...
-def generate_pdf(student_name: str, student_id: str, unit_title: str, evaluation: dict) -> str:
-    pdf = FPDF()
-    pdf.add_page()
-
-    # Header
-    pdf.set_font("Arial", "B", 16)
     pdf.cell(
         0,
         10,
@@ -431,15 +316,87 @@ def generate_pdf(student_name: str, student_id: str, unit_title: str, evaluation
     )
     pdf.ln(5)
 
-    # ... rest of generate_pdf with pdf.* calls ...
+    # Overall grade band
+    pdf.set_font("Arial", "B", 14)
+    pdf.set_fill_color(220, 235, 255)
+    grade = evaluation.get("grade", "N/A")
+    score = evaluation.get("total_score", 0)
+    perc = evaluation.get("percentage", 0)
+    pdf.cell(
+        0,
+        12,
+        sanitize_text(f"FINAL GRADE: {grade} | SCORE: {score}/220 ({perc}%)"),
+        1,
+        1,
+        "C",
+        True,
+    )
+    pdf.ln(5)
 
+    # Mark scheme breakdown
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 8, sanitize_text("1. MARK SCHEME BREAKDOWN"), 0, 1)
+    pdf.set_font("Arial", "", 10)
 
-for s in evaluation.get("strengths", []):
-    pdf.multi_cell(0, 5, "- " + sanitize_text(s))
+    breakdown = evaluation.get("mark_breakdown", {})
+    for crit, data in breakdown.items():
+        max_s = QUALIFI_RUBRIC.get(crit, 0)
+        s = data.get("score", 0)
+        pdf.set_font("Arial", "B", 10)
+        pdf.cell(0, 6, sanitize_text(f"{crit} ({s}/{max_s})"), 0, 1)
+        pdf.set_font("Arial", "", 9)
+        pdf.multi_cell(0, 5, sanitize_text(data.get("justification", "")))
+        pdf.ln(2)
 
-for i in evaluation.get("improvements", []):
-    pdf.multi_cell(0, 5, "- " + sanitize_text(i))
+    # Criteria feedback
+    pdf.ln(3)
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 8, sanitize_text("2. ASSESSMENT CRITERIA FEEDBACK"), 0, 1)
 
+    for item in evaluation.get("criteria_feedback", []):
+        pdf.set_font("Arial", "B", 10)
+        crit_text = item.get("criterion", "N/A")
+        status = "[ACHIEVED]" if item.get("achieved") else "[NOT ACHIEVED]"
+        pdf.multi_cell(0, 6, sanitize_text(f"{status} {crit_text}"))
+        pdf.set_font("Arial", "I", 9)
+        pdf.multi_cell(
+            0,
+            5,
+            sanitize_text(f"Evidence: {item.get('evidence', 'N/A')}"),
+        )
+        pdf.set_font("Arial", "", 9)
+        pdf.multi_cell(
+            0,
+            5,
+            sanitize_text(f"Improvement: {item.get('improvement', 'N/A')}"),
+        )
+        pdf.ln(2)
+
+    # Overall feedback
+    pdf.ln(3)
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 8, sanitize_text("3. OVERALL EVALUATION"), 0, 1)
+    pdf.set_font("Arial", "", 10)
+    pdf.multi_cell(0, 6, sanitize_text(evaluation.get("overall_feedback", "N/A")))
+
+    # Strengths and improvements
+    pdf.ln(3)
+    pdf.set_font("Arial", "B", 11)
+    pdf.cell(0, 6, sanitize_text("Key Strengths:"), 0, 1)
+    pdf.set_font("Arial", "", 10)
+    for s in evaluation.get("strengths", []):
+        pdf.multi_cell(0, 5, sanitize_text(f"- {s}"))
+    pdf.ln(2)
+
+    pdf.set_font("Arial", "B", 11)
+    pdf.cell(0, 6, sanitize_text("Areas for Improvement:"), 0, 1)
+    pdf.set_font("Arial", "", 10)
+    for i in evaluation.get("improvements", []):
+        pdf.multi_cell(0, 5, sanitize_text(f"- {i}"))
+
+    filename = f"tmp/qualifi-pdfs/{student_id}_{datetime.now().strftime('%Y%m%d%H%M')}.pdf"
+    pdf.output(filename)
+    return filename
 
 
 @app.get("/", response_class=HTMLResponse)
