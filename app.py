@@ -227,9 +227,6 @@ async def evaluate_assignment(
     assignment: UploadFile = File(...)
 ):
     try:
-        content = await assignment.read()
-        assignment_text = content.decode('utf-8', errors='ignore')
-                
         # Check if assignment is an image file
         file_extension = assignment.filename.lower().split('.')[-1] if assignment.filename else ''
         
