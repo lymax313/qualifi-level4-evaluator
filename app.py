@@ -51,8 +51,8 @@ UNIT_CRITERIA = {
         "2.2 Discuss how these AI applications are implemented and the benefits to industry.",
         "3.1 Assess AI trending tools used within industry and the challenges faced in implementing these technologies.",
         "3.2 Discuss possible impact from such application of the trending AI tools.",
-        "4.1 Describe society’s future needs in respect of sustainability.",
-        "4.2 Review how AI applications can be optimized to address society’s needs responsibly and sustainably."
+        "4.1 Describe society's future needs in respect of sustainability.",
+        "4.2 Review how AI applications can be optimized to address society's needs responsibly and sustainably."
     ],
     "AID 402": [
         "2.1 Calculate and interpret probabilities for various events and distributions.",
@@ -102,11 +102,11 @@ UNIT_CRITERIA = {
 }
 
 def parse_rubric_file(content: bytes, filename: str) -> str:
-    \"\"\"Parse rubric from uploaded file.\"\"\"
+    """Parse rubric from uploaded file."""
     try:
         rubric_text = content.decode('utf-8', errors='ignore')
         # Look for summative sections specifically
-        summative_pattern = r'SUMMATIVE\\s+TASK.*?(?=FORMATIVE|$)'
+        summative_pattern = r'SUMMATIVE\s+TASK.*?(?=FORMATIVE|$)'
         summative_match = re.search(summative_pattern, rubric_text, re.DOTALL | re.IGNORECASE)
         
         if summative_match:
@@ -122,7 +122,7 @@ def parse_rubric_file(content: bytes, filename: str) -> str:
         return None
 
 async def evaluate_with_gemini(assignment_text: str, rubric_text: str, unit_title: str) -> dict:
-    \"\"\"Evaluate assignment using Gemini AI with strict summative focus.\"\"\"
+    """Evaluate assignment using Gemini AI with strict summative focus."""
     try:
         if not GEMINI_API_KEY:
             return generate_fallback_evaluation()
@@ -134,12 +134,11 @@ async def evaluate_with_gemini(assignment_text: str, rubric_text: str, unit_titl
                 unit_code = code
                 break
         
-        unit_specific_criteria = "\
-".join([f"- {c}" for c in UNIT_CRITERIA.get(unit_code, [])])
+        unit_specific_criteria = "\n".join([f"- {c}" for c in UNIT_CRITERIA.get(unit_code, [])])
 
         model = genai.GenerativeModel('gemini-1.5-flash')
         
-        prompt = f\"\"\"You are an AI evaluator for the Qualifi Level 4 Diploma in Artificial Intelligence.
+        prompt = f"""You are an AI evaluator for the Qualifi Level 4 Diploma in Artificial Intelligence.
 You must mark ONLY the SUMMATIVE TASK for the specified unit: {unit_title}.
 
 You are given:
@@ -164,7 +163,7 @@ LEARNER'S SUMMATIVE ANSWER:
 
 Return ONLY valid JSON in this exact format:
 {{
-  "unit_code": \"{unit_code}\",
+  "unit_code": "{unit_code}",
   "mark_breakdown": {{
     "Content": {{"score": 0, "justification": ""}},
     "Application of Theory and Literature": {{"score": 0, "justification": ""}},
@@ -184,7 +183,7 @@ Return ONLY valid JSON in this exact format:
   "strengths": [],
   "improvements": []
 }}
-\"\"\"
+"""
         response = model.generate_content(prompt)
         result_text = response.text.strip()
         
@@ -194,7 +193,7 @@ Return ONLY valid JSON in this exact format:
         elif result_text.startswith("```"):
             result_text = result_text.replace("```", "", 2).strip()
             
-        json_match = re.search(r'\\{.*\\}', result_text, re.DOTALL)
+        json_match = re.search(r'\{.*\}', result_text, re.DOTALL)
         if json_match:
             evaluation = json.loads(json_match.group())
             
@@ -318,15 +317,15 @@ def generate_pdf(student_name: str, student_id: str, unit_title: str, evaluation
     pdf.output(filename)
     return filename
 
-@app.get(\"/\", response_class=HTMLResponse)
+@app.get("/", response_class=HTMLResponse)
 async def root():
     try:
-        with open(\"index.html\", \"r\") as f:
+        with open("index.html", "r") as f:
             return f.read()
     except:
-        return \"Qualifi Evaluator API Running\"
+        return "Qualifi Evaluator API Running"
 
-@app.post(\"/api/evaluate\")
+@app.post("/api/evaluate")
 async def evaluate_assignment(
     student_name: str = Form(...),
     student_id: str = Form(...),
@@ -345,31 +344,6 @@ async def evaluate_assignment(
         pdf_path = generate_pdf(student_name, student_id, unit_title, evaluation)
         
         return JSONResponse({
-            \"success\": True,
-            \"data\": evaluation,
-            \"pdf_url\": f\"/download/{os.path.basename(pdf_path)}\"
-        })
-    except Exception as e:
-        logger.error(f\"API error: {str(e)}\")
-        raise HTTPException(status_code=500, detail=str(e))
-
-from fastapi.responses import JSONResponse, FileResponse
-import os
-import uvicorn
-
-# ... your existing code above ...
-
-    try:
-        rubric_content = await rubric.read()
-        rubric_text = parse_rubric_file(rubric_content, rubric.filename)
-
-        assignment_content = await assignment.read()
-        assignment_text = assignment_content.decode("utf-8", errors="ignore")
-
-        evaluation = await evaluate_with_gemini(assignment_text, rubric_text, unit_title)
-        pdf_path = generate_pdf(student_name, student_id, unit_title, evaluation)
-
-        return JSONResponse({
             "success": True,
             "data": evaluation,
             "pdf_url": f"/download/{os.path.basename(pdf_path)}"
@@ -378,14 +352,12 @@ import uvicorn
         logger.error(f"API error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @app.get("/download/{filename}")
 async def download_file(filename: str):
-    path = f"/tmp/qualifi-pdfs/{filename}"
+    path = f"tmp/qualifi-pdfs/{filename}"
     if os.path.exists(path):
         return FileResponse(path)
     return JSONResponse({"error": "File not found"}, status_code=404)
-
 
 if __name__ == "__main__":
     uvicorn.run(
