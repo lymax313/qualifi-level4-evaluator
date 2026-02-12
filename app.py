@@ -386,6 +386,23 @@ pdf.multi_cell(0, 6, sanitize_text(evaluation.get("overall_feedback", "N/A")))
 
 ...
 
+def generate_pdf(student_name: str, student_id: str, unit_title: str, evaluation: dict) -> str:
+    pdf = FPDF()
+    pdf.add_page()
+
+    # Header
+    pdf.set_font("Arial", "B", 16)
+    pdf.cell(
+        0,
+        10,
+        sanitize_text("QUALIFI LEVEL 4 DIPLOMA IN AI - EVALUATION REPORT"),
+        0,
+        1,
+        "C",
+    )
+    ...
+
+
 for s in evaluation.get("strengths", []):
     pdf.multi_cell(0, 5, "- " + sanitize_text(s))
 
