@@ -1,230 +1,284 @@
 <!DOCTYPE html>
-<html>
-  <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>Qualifi L4 Evaluator - Gemini AI</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-  </head>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Qualifi Level 4 Evaluator</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background-color: #f5f7fb;
+      margin: 0;
+      padding: 0;
+    }
+    .container {
+      max-width: 900px;
+      margin: 40px auto;
+      background: #ffffff;
+      padding: 24px 28px 32px;
+      border-radius: 10px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.06);
+    }
+    h1 {
+      margin-top: 0;
+      text-align: center;
+      color: #1f2933;
+    }
+    .subtitle {
+      text-align: center;
+      color: #52606d;
+      margin-bottom: 24px;
+    }
+    label {
+      font-weight: 600;
+      color: #323f4b;
+      display: block;
+      margin-bottom: 6px;
+    }
+    input[type="text"],
+    input[type="file"],
+    select {
+      width: 100%;
+      padding: 8px 10px;
+      border-radius: 6px;
+      border: 1px solid #cbd2d9;
+      font-size: 14px;
+      box-sizing: border-box;
+    }
+    .row {
+      display: flex;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+    .row .field {
+      flex: 1;
+    }
+    .field {
+      margin-bottom: 16px;
+    }
+    button {
+      width: 100%;
+      padding: 12px;
+      background-color: #2563eb;
+      border: none;
+      color: #ffffff;
+      font-size: 16px;
+      font-weight: 600;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    button:disabled {
+      background-color: #9fb3c8;
+      cursor: not-allowed;
+    }
+    .error {
+      margin-top: 16px;
+      padding: 10px 12px;
+      border-radius: 6px;
+      background-color: #fde8e8;
+      color: #9b1c1c;
+      font-size: 14px;
+    }
+    .success {
+      margin-top: 16px;
+      padding: 10px 12px;
+      border-radius: 6px;
+      background-color: #e3f9e5;
+      color: #276749;
+      font-size: 14px;
+    }
+    .result-card {
+      margin-top: 24px;
+      padding: 18px 20px;
+      border-radius: 10px;
+      background-color: #f0f9ff;
+      border: 1px solid #bee3f8;
+    }
+    .result-header {
+      font-weight: 700;
+      margin-bottom: 10px;
+      color: #1f2933;
+    }
+    .result-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 14px;
+      margin-bottom: 4px;
+      color: #323f4b;
+    }
+    .grade-banner {
+      margin-top: 16px;
+      padding: 12px 14px;
+      text-align: center;
+      border-radius: 8px;
+      background-color: #e1effe;
+      color: #1f2933;
+      font-weight: 700;
+      font-size: 16px;
+    }
+    .section-title {
+      font-weight: 700;
+      margin-top: 16px;
+      margin-bottom: 6px;
+      color: #1f2933;
+    }
+    .small-text {
+      font-size: 13px;
+      color: #52606d;
+    }
+    .pdf-button {
+      margin-top: 16px;
+      display: inline-block;
+      padding: 10px 14px;
+      border-radius: 6px;
+      background-color: #2563eb;
+      color: #ffffff;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Qualifi Level 4 Evaluator</h1>
+    <p class="subtitle">Upload a rubric and learner assignment to generate an automated evaluation and PDF report.</p>
 
-  <body class="bg-gray-50 min-h-screen py-8">
-    <div class="max-w-5xl mx-auto px-4">
-      <div class="bg-white rounded-lg shadow-lg p-8">
-        <h1 class="text-3xl font-bold text-center mb-2">
-          Qualifi Level 4 Assignment Evaluator
-        </h1>
-        <p class="text-center text-gray-600 mb-8">
-          AI-powered evaluation with Gemini - Result Format Template
-        </p>
-
-        <form id="evalForm" class="space-y-6" enctype="multipart/form-data">
-          <div class="grid grid-cols-2 gap-4">
-            <div>
-              <label class="block text-sm font-medium mb-2">Student Name</label>
-              <input
-                type="text"
-                id="studentName"
-                required
-                class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-              >
-            </div>
-            <div>
-              <label class="block text-sm font-medium mb-2">Student ID</label>
-              <input
-                type="text"
-                id="studentId"
-                required
-                class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-              >
-            </div>
-          </div>
-
-          <div>
-            <label class="block text-sm font-medium mb-2">Unit Title</label>
-            <input
-              type="text"
-              id="unitTitle"
-              required
-              placeholder="e.g., Introduction to AI and Applications"
-              class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-            >
-          </div>
-
-          <div>
-            <label class="block text-sm font-medium mb-2">
-              Upload Rubric/Assessment Criteria (.txt, .pdf, .docx)
-            </label>
-            <input
-              type="file"
-              id="rubricFile"
-              required
-              accept=".txt,.pdf,.docx"
-              class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-green-50 file:text-green-700 hover:file:bg-green-100"
-            >
-          </div>
-
-          <div>
-            <label class="block text-sm font-medium mb-2">
-              Upload Assignment File (.txt, .pdf, .docx)
-            </label>
-            <input
-              type="file"
-              id="assignmentFile"
-              required
-              accept=".txt,.pdf,.docx,.png,.jpg,.jpeg"
-              class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
-            >
-          </div>
-
-          <button
-            type="submit"
-            class="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 transition mt-4"
-          >
-            Evaluate with Gemini AI
-          </button>
-        </form>
-
-        <div id="loading" class="mt-8 text-center hidden">
-          <div class="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-b-600"></div>
-          <p class="mt-2 text-gray-600">Evaluating with Gemini AI...</p>
+    <form id="evalForm">
+      <div class="row">
+        <div class="field">
+          <label for="studentName">Student Name</label>
+          <input type="text" id="studentName" name="student_name" required />
         </div>
-
-        <div id="result" class="mt-8 hidden"></div>
+        <div class="field">
+          <label for="studentId">Student ID</label>
+          <input type="text" id="studentId" name="student_id" required />
+        </div>
       </div>
-    </div>
 
-    <script>
-      document.getElementById('evalForm').addEventListener('submit', async (e) => {
-        e.preventDefault();
+      <div class="field">
+        <label for="unitTitle">Unit Title (include unit code e.g. AID 401)</label>
+        <input type="text" id="unitTitle" name="unit_title" required />
+      </div>
 
-        const loading = document.getElementById('loading');
-        const result = document.getElementById('result');
+      <div class="field">
+        <label for="rubricFile">Upload Rubric / Assignment Brief (.txt, .docx, .pdf)</label>
+        <input type="file" id="rubricFile" name="rubric" accept=".txt,.pdf,.doc,.docx" required />
+      </div>
 
-        loading.classList.remove('hidden');
-        result.classList.add('hidden');
+      <div class="field">
+        <label for="assignmentFile">Upload Assignment File (.txt, .pdf, .docx)</label>
+        <input type="file" id="assignmentFile" name="assignment" accept=".txt,.pdf,.doc,.docx" required />
+      </div>
 
-        const formData = new FormData();
-        formData.append('student_name', document.getElementById('studentName').value);
-        formData.append('student_id', document.getElementById('studentId').value);
-        formData.append('unit_title', document.getElementById('unitTitle').value);
-        formData.append('rubric', document.getElementById('rubricFile').files[0]);
-        formData.append('assignment', document.getElementById('assignmentFile').files[0]);
+      <button type="submit" id="submitBtn">Run Automated Evaluation</button>
+    </form>
 
-        try {
-          const res = await fetch('/api/evaluate', {
-            method: 'POST',
-            body: formData
-          });
+    <div id="message"></div>
+    <div id="result"></div>
+  </div>
 
-          const data = await res.json();
-          loading.classList.add('hidden');
+  <script>
+    const form = document.getElementById("evalForm");
+    const submitBtn = document.getElementById("submitBtn");
+    const messageDiv = document.getElementById("message");
+    const resultDiv = document.getElementById("result");
 
-          if (data.success) {
-            // match backend: { success, data: evaluation, pdf_url }
-            const evalData = data.data;
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      messageDiv.innerHTML = "";
+      resultDiv.innerHTML = "";
+      submitBtn.disabled = true;
+      submitBtn.textContent = "Evaluating...";
 
-            let loHtml = '';
-            const evalByLo = evalData.evaluation || {};
+      const formData = new FormData(form);
 
-            Object.entries(evalByLo).forEach(([loKey, loValue]) => {
-              loHtml += `
-                <div class="mb-6 border rounded-lg p-4">
-                  <h3 class="font-bold text-lg mb-3 text-blue-700">${loKey}</h3>
-                  <div class="space-y-3">
-              `;
+      try {
+        const resp = await fetch("/api/evaluate", {
+          method: "POST",
+          body: formData,
+        });
 
-              (loValue.criteria || []).forEach((c) => {
-                loHtml += `
-                  <div class="flex items-start gap-3 p-3 bg-gray-50 rounded">
-                    <div class="flex-shrink-0 flex gap-2">
-                      <span class="px-3 py-1 rounded text-sm font-semibold ${
-                        c.achieved === 'Y'
-                          ? 'bg-green-100 text-green-700'
-                          : 'bg-red-100 text-red-700'
-                      }">
-                        ${c.achieved === 'Y' ? '✓ Achieved' : '✗ Not Achieved'}
-                      </span>
-                    </div>
-                    <div class="flex-1">
-                      <p class="font-semibold mb-1">${c.criterion}</p>
-                      <p class="text-sm text-gray-700">${c.evidence}</p>
-                    </div>
-                  </div>
-                `;
-              });
-
-              loHtml += `
-                  </div>
-                </div>
-              `;
-            });
-
-            result.innerHTML = `
-              <div class="bg-green-50 border border-green-200 rounded-lg p-6">
-                <h2 class="text-2xl font-bold mb-4">Evaluation Complete</h2>
-
-                <div class="grid grid-cols-2 gap-4 mb-4 p-4 bg-white rounded">
-                  <div>
-                    <p class="text-sm text-gray-600">Student:</p>
-                    <p class="font-semibold">${data.student_name || ''}</p>
-                  </div>
-                  <div>
-                    <p class="text-sm text-gray-600">ID:</p>
-                    <p class="font-semibold">${data.student_id || ''}</p>
-                  </div>
-                  <div>
-                    <p class="text-sm text-gray-600">Unit Title:</p>
-                    <p class="font-semibold">${data.unit_title || ''}</p>
-                  </div>
-                </div>
-
-                <div class="mb-4">
-                  <h3 class="text-xl font-bold mb-3">Learning Outcomes Assessment:</h3>
-                  ${loHtml || '<p class="text-gray-600">No detailed LO breakdown available.</p>'}
-                </div>
-
-                <div class="bg-white rounded p-4 mb-4">
-                  <h3 class="font-bold mb-2">Overall Feedback:</h3>
-                  <p class="text-gray-700">${evalData.overall_feedback || 'No feedback available.'}</p>
-                </div>
-
-                <div class="bg-blue-100 border border-blue-300 rounded p-4 mb-4">
-                  <p class="text-2xl font-bold text-blue-800 text-center">
-                    Overall Grade: ${evalData.overall_grade || evalData.grade || 'N/A'}
-                  </p>
-                </div>
-
-                <a
-                  href="${data.pdf_url}"
-                  download
-                  class="inline-block bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 font-semibold"
-                >
-                  Download PDF Report
-                </a>
-              </div>
-            `;
-
-            result.classList.remove('hidden');
-          } else {
-            result.innerHTML = `
-              <div class="bg-red-50 border border-red-200 rounded-lg p-4">
-                <p class="text-red-800">
-                  Error: ${data.detail || data.error || 'Evaluation failed'}
-                </p>
-              </div>
-            `;
-            result.classList.remove('hidden');
-          }
-        } catch (err) {
-          loading.classList.add('hidden');
-          result.innerHTML = `
-            <div class="bg-red-50 border border-red-200 rounded-lg p-4">
-              <p class="text-red-800">Error: ${err.message}</p>
-            </div>
-          `;
-          result.classList.remove('hidden');
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          throw new Error(err.detail || "Evaluation failed");
         }
-      });
-    </script>
-  </body>
+
+        const data = await resp.json();
+
+        messageDiv.innerHTML = '<div class="success">Evaluation complete. Review the details below.</div>';
+
+        const evalData = data.data || {};
+        const breakdown = evalData.mark_breakdown || {};
+        const criteria = evalData.criteria_feedback || [];
+        const pdfUrl = data.pdf_url;
+
+        let breakdownHtml = "";
+        for (const key in breakdown) {
+          const item = breakdown[key];
+          breakdownHtml += `
+            <div class="small-text"><strong>${key}</strong>: ${item.score} — ${item.justification}</div>
+          `;
+        }
+
+        let criteriaHtml = "";
+        criteria.forEach((c) => {
+          criteriaHtml += `
+            <div class="small-text">
+              <strong>${c.achieved ? "[ACHIEVED]" : "[NOT ACHIEVED]"} ${c.criterion}</strong><br/>
+              Evidence: ${c.evidence}<br/>
+              Improvement: ${c.improvement}
+            </div>
+            <hr/>
+          `;
+        });
+
+        resultDiv.innerHTML = `
+          <div class="result-card">
+            <div class="result-header">Evaluation Complete</div>
+            <div class="result-row">
+              <span><strong>Student:</strong> ${data.student_name}</span>
+              <span><strong>ID:</strong> ${data.student_id}</span>
+            </div>
+            <div class="result-row">
+              <span><strong>Unit Title:</strong> ${data.unit_title}</span>
+            </div>
+
+            <div class="section-title">Learning Outcomes Assessment</div>
+            <div class="small-text">
+              Automated rubric-based scoring; see mark breakdown and criteria comments below.
+            </div>
+
+            <div class="section-title">Overall Feedback</div>
+            <div class="small-text">
+              ${evalData.overall_feedback || ""}
+            </div>
+
+            <div class="grade-banner">
+              Overall Grade: ${evalData.grade || "N/A"} — ${evalData.total_score || 0}/220 (${evalData.percentage || 0}%)
+            </div>
+
+            <div class="section-title">Mark Scheme Breakdown</div>
+            ${breakdownHtml}
+
+            <div class="section-title">Assessment Criteria Feedback</div>
+            ${criteriaHtml || '<div class="small-text">No detailed LO breakdown available.</div>'}
+
+            ${
+              pdfUrl
+                ? `<a class="pdf-button" href="${pdfUrl}" target="_blank">Download PDF Report</a>`
+                : ""
+            }
+          </div>
+        `;
+      } catch (err) {
+        console.error(err);
+        messageDiv.innerHTML = `<div class="error">${err.message}</div>`;
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Run Automated Evaluation";
+      }
+    });
+  </script>
+</body>
 </html>
