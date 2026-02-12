@@ -99,7 +99,7 @@ async def evaluate_with_gemini(assignment_text: str, module: str) -> dict:
         if not GEMINI_API_KEY:
             return generate_fallback_evaluation(assignment_text)
         
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-pro')
         
         prompt = f"""You are a Qualifi Level 4 academic evaluator. Strictly follow the grading rubric.
 
