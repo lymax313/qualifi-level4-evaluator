@@ -156,11 +156,7 @@ def feedback_for_score(score: int, max_score: int, area: str) -> str:
 
 
 def evaluate_locally(assignment_text: str, rubric_text: str | None, unit_title: str) -> dict:
-    """
-    Simple heuristic evaluator, fully local (no API):
-    - Scores based on word count, basic keyword presence, and formatting.
-    - Generates banded justifications, overall feedback, strengths, improvements.
-    """
+    """Local heuristic evaluator (no external API)."""
     text_lower = assignment_text.lower()
     words = assignment_text.split()
     word_count = len(words)
@@ -289,6 +285,7 @@ def evaluate_locally(assignment_text: str, rubric_text: str | None, unit_title: 
 def generate_pdf(student_name: str, student_id: str, unit_title: str, evaluation: dict) -> str:
     pdf = FPDF()
     pdf.add_page()
+    page_width = pdf.w - 2 * pdf.l_margin  # usable width for multi_cell
 
     # Header
     pdf.set_font("Arial", "B", 16)
@@ -345,7 +342,7 @@ def generate_pdf(student_name: str, student_id: str, unit_title: str, evaluation
         pdf.set_font("Arial", "B", 10)
         pdf.cell(0, 6, sanitize_text(f"{crit} ({s}/{max_s})"), 0, 1)
         pdf.set_font("Arial", "", 9)
-        pdf.multi_cell(0, 5, sanitize_text(data.get("justification", "")))
+        pdf.multi_cell(page_width, 5, sanitize_text(data.get("justification", "")))
         pdf.ln(2)
 
     # Criteria feedback
@@ -357,16 +354,16 @@ def generate_pdf(student_name: str, student_id: str, unit_title: str, evaluation
         pdf.set_font("Arial", "B", 10)
         crit_text = item.get("criterion", "N/A")
         status = "[ACHIEVED]" if item.get("achieved") else "[NOT ACHIEVED]"
-        pdf.multi_cell(0, 6, sanitize_text(f"{status} {crit_text}"))
+        pdf.multi_cell(page_width, 6, sanitize_text(f"{status} {crit_text}"))
         pdf.set_font("Arial", "I", 9)
         pdf.multi_cell(
-            0,
+            page_width,
             5,
             sanitize_text(f"Evidence: {item.get('evidence', 'N/A')}"),
         )
         pdf.set_font("Arial", "", 9)
         pdf.multi_cell(
-            0,
+            page_width,
             5,
             sanitize_text(f"Improvement: {item.get('improvement', 'N/A')}"),
         )
@@ -377,7 +374,11 @@ def generate_pdf(student_name: str, student_id: str, unit_title: str, evaluation
     pdf.set_font("Arial", "B", 12)
     pdf.cell(0, 8, sanitize_text("3. OVERALL EVALUATION"), 0, 1)
     pdf.set_font("Arial", "", 10)
-    pdf.multi_cell(0, 6, sanitize_text(evaluation.get("overall_feedback", "N/A")))
+    pdf.multi_cell(
+        page_width,
+        6,
+        sanitize_text(evaluation.get("overall_feedback", "N/A")),
+    )
 
     # Strengths and improvements
     pdf.ln(3)
@@ -385,14 +386,14 @@ def generate_pdf(student_name: str, student_id: str, unit_title: str, evaluation
     pdf.cell(0, 6, sanitize_text("Key Strengths:"), 0, 1)
     pdf.set_font("Arial", "", 10)
     for s in evaluation.get("strengths", []):
-        pdf.multi_cell(0, 5, sanitize_text(f"- {s}"))
+        pdf.multi_cell(page_width, 5, sanitize_text(f"- {s}"))
     pdf.ln(2)
 
     pdf.set_font("Arial", "B", 11)
     pdf.cell(0, 6, sanitize_text("Areas for Improvement:"), 0, 1)
     pdf.set_font("Arial", "", 10)
     for i in evaluation.get("improvements", []):
-        pdf.multi_cell(0, 5, sanitize_text(f"- {i}"))
+        pdf.multi_cell(page_width, 5, sanitize_text(f"- {i}"))
 
     filename = f"tmp/qualifi-pdfs/{student_id}_{datetime.now().strftime('%Y%m%d%H%M')}.pdf"
     pdf.output(filename)
