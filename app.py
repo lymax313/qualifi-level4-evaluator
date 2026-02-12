@@ -17,7 +17,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
-app = FastAPI(title="Qualifi Level 4 Evaluator", version="4.0.0")
+app = FastAPI(title="Qualifi Level 4 Evaluator", version="5.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -29,15 +29,14 @@ app.add_middleware(
 
 os.makedirs("tmp/qualifi-pdfs", exist_ok=True)
 
-# AI Modules
-MODULES = [
-    "DAI401 - Introduction to Artificial Intelligence and Applications",
-    "DAI402 - Mathematical Foundations for Machine Learning",
-    "DAI403 - Data Science Using Python",
-    "DAI404 - Big Data Management",
-    "DAI405 - Introduction to Deep Learning",
-    "DAI406 - Artificial Intelligence Ethics"
-]
+# Qualifi Marking Rubric (Total: 220 points)
+QUALIFI_RUBRIC = {
+    "Content": 50,
+    "Application of Theory and Literature": 40,
+    "Knowledge and Understanding": 50,
+    "Presentation/Writing Skills": 40,
+    "Referencing": 40
+}
 
 GRADE_BANDS = [
     {"name": "Distinction", "min": 70, "max": 100},
@@ -47,50 +46,79 @@ GRADE_BANDS = [
 ]
 
 def parse_rubric_file(content: bytes, filename: str) -> str:
-    """Parse rubric from uploaded file."""
+    """Parse rubric from uploaded file - extract summative assessment criteria only."""
     try:
-        # Try decoding as text
         rubric_text = content.decode('utf-8', errors='ignore')
-        if len(rubric_text.strip()) > 20:
+        
+        # Extract only SUMMATIVE assessment sections (ignore FORMATIVE)
+        summative_pattern = r'SUMMATIVE\s+TASK.*?(?=FORMATIVE|$)'
+        summative_match = re.search(summative_pattern, rubric_text, re.DOTALL | re.IGNORECASE)
+        
+        if summative_match:
+            summative_text = summative_match.group()
+            logger.info(f"Extracted summative assessment criteria: {len(summative_text)} chars")
+            return summative_text
+        
+        # If no explicit SUMMATIVE section, look for Learning Outcomes and Assessment Criteria
+        if "Learning Outcomes" in rubric_text and "Assessment Criteria" in rubric_text:
+            logger.info(f"Using full rubric with Learning Outcomes: {len(rubric_text)} chars")
             return rubric_text
+        
+        if len(rubric_text.strip()) > 100:
+            return rubric_text
+        
         return None
     except Exception as e:
         logger.error(f"Rubric parsing error: {str(e)}")
         return None
 
-async def evaluate_with_gemini(assignment_text: str, rubric_text: str, module: str) -> dict:
-    """Evaluate assignment using uploaded rubric."""
+async def evaluate_with_gemini(assignment_text: str, rubric_text: str, unit_title: str) -> dict:
+    """Evaluate assignment using Qualifi summative assessment criteria."""
     try:
         if not GEMINI_API_KEY:
             return generate_fallback_evaluation()
         
-        if not rubric_text or len(rubric_text.strip()) < 20:
+        if not rubric_text or len(rubric_text.strip()) < 100:
             return generate_fallback_evaluation()
         
         model = genai.GenerativeModel('gemini-pro')
         
-        prompt = f"""You are a Qualifi Level 4 academic evaluator.
+        prompt = f"""You are a Qualifi Level 4 academic evaluator for the unit: {unit_title}
 
-Module: {module}
+SUMMATIVE ASSESSMENT RUBRIC (Focus ONLY on summative criteria, ignore formative):
+{rubric_text[:3000]}
 
-RUBRIC/ASSESSMENT CRITERIA:
-{rubric_text[:2000]}
+QUALIFI MARKING RUBRIC (Total 220 points):
+1. Content: 50 points
+2. Application of Theory and Literature: 40 points
+3. Knowledge and Understanding: 50 points
+4. Presentation/Writing Skills: 40 points
+5. Referencing: 40 points
 
-Evaluate this assignment STRICTLY according to the rubric criteria provided above.
-For each criterion in the rubric, assess the student's work and provide:
-1. Score (0-100)
-2. Grade band (Pass/Merit/Distinction/FAIL)
-3. Detailed feedback with evidence
-
-Assignment:
+ASSIGNMENT TO EVALUATE:
 {assignment_text[:4000]}
 
-Return ONLY valid JSON in this exact format:
+Evaluate this assignment STRICTLY according to the SUMMATIVE assessment criteria in the rubric.
+
+For EACH Learning Outcome in the summative section, assess if the student has achieved it (Y/N) and provide evidence.
+
+Then provide scores for each of the 5 Qualifi marking criteria.
+
+Return ONLY valid JSON in this EXACT format:
 {{
-    "Content": {{"score": <number>, "band": "<band>", "feedback": "<text>"}},
-    "Theory": {{"score": <number>, "band": "<band>", "feedback": "<text>"}},
-    "Understanding": {{"score": <number>, "band": "<band>", "feedback": "<text>"}},
-    "Presentation": {{"score": <number>, "band": "<band>", "feedback": "<text>"}}
+  "learning_outcomes": [
+    {{"outcome": "LO description", "achieved": "Y or N", "evidence": "specific evidence from assignment"}}
+  ],
+  "rubric_scores": {{
+    "Content": {{"score": 0-50, "feedback": ""}},
+    "Application of Theory and Literature": {{"score": 0-40, "feedback": ""}},
+    "Knowledge and Understanding": {{"score": 0-50, "feedback": ""}},
+    "Presentation/Writing Skills": {{"score": 0-40, "feedback": ""}},
+    "Referencing": {{"score": 0-40, "feedback": ""}}
+  }},
+  "overall_feedback": "",
+  "strengths": [],
+  "improvements": []
 }}
 """
         
@@ -102,77 +130,116 @@ Return ONLY valid JSON in this exact format:
         if json_match:
             evaluation = json.loads(json_match.group())
             
-            # Safely calculate weights
-            for key in ["Content", "Theory", "Understanding", "Presentation"]:
-                if key in evaluation and isinstance(evaluation[key], dict):
-                    score = evaluation[key].get("score", 50)
-                    weight = {"Content": 0.30, "Theory": 0.25, "Understanding": 0.25, "Presentation": 0.20}.get(key, 0.25)
-                    evaluation[key]["weighted"] = score * weight
-                else:
-                    evaluation[key] = {"score": 50, "band": "50-59", "weighted": 12.5, "feedback": "No data"}
+            # Calculate total score
+            total_score = 0
+            if "rubric_scores" in evaluation:
+                for criterion, max_score in QUALIFI_RUBRIC.items():
+                    if criterion in evaluation["rubric_scores"]:
+                        score = evaluation["rubric_scores"][criterion].get("score", 0)
+                        total_score += score
+            
+            evaluation["total_score"] = total_score
+            evaluation["percentage"] = round((total_score / 220) * 100, 1)
+            evaluation["grade"] = calculate_grade(evaluation["percentage"])
             
             return evaluation
         else:
             return generate_fallback_evaluation()
-        
+            
     except Exception as e:
-        logger.error(f"Gemini error: {str(e)}")
+        logger.error(f"Gemini evaluation error: {str(e)}")
         return generate_fallback_evaluation()
 
 def generate_fallback_evaluation() -> dict:
     """Fallback evaluation when Gemini fails."""
     return {
-        "Content": {"score": 55, "band": "50-59", "weighted": 16.5, "feedback": "Unable to fully evaluate. Please review manually."},
-        "Theory": {"score": 55, "band": "50-59", "weighted": 13.75, "feedback": "Unable to fully evaluate. Please review manually."},
-        "Understanding": {"score": 55, "band": "50-59", "weighted": 13.75, "feedback": "Unable to fully evaluate. Please review manually."},
-        "Presentation": {"score": 55, "band": "50-59", "weighted": 11.0, "feedback": "Unable to fully evaluate. Please review manually."}
+        "learning_outcomes": [
+            {"outcome": "Unable to evaluate", "achieved": "N", "evidence": "Evaluation system error"}
+        ],
+        "rubric_scores": {
+            "Content": {"score": 25, "feedback": "Unable to fully evaluate. Please review manually."},
+            "Application of Theory and Literature": {"score": 20, "feedback": "Unable to fully evaluate."},
+            "Knowledge and Understanding": {"score": 25, "feedback": "Unable to fully evaluate."},
+            "Presentation/Writing Skills": {"score": 20, "feedback": "Unable to fully evaluate."},
+            "Referencing": {"score": 20, "feedback": "Unable to fully evaluate."}
+        },
+        "total_score": 110,
+        "percentage": 50.0,
+        "grade": "Pass",
+        "overall_feedback": "System error occurred. Manual review required.",
+        "strengths": [],
+        "improvements": []
     }
 
-def calculate_grade(total_score: float) -> str:
+def calculate_grade(percentage: float) -> str:
+    """Calculate grade band based on percentage."""
     for band in GRADE_BANDS:
-        if band["min"] <= total_score <= band["max"]:
+        if band["min"] <= percentage <= band["max"]:
             return band["name"]
     return "Ungraded"
 
-def generate_pdf(student_name: str, student_id: str, module: str, evaluation: dict, total_score: float, grade: str) -> str:
+def generate_pdf(student_name: str, student_id: str, unit_title: str, evaluation: dict) -> str:
+    """Generate PDF report with Qualifi formatting."""
     pdf = FPDF()
     pdf.add_page()
     
+    # Header
     pdf.set_font("Arial", "B", 18)
     pdf.cell(0, 12, "Qualifi Level 4 Assignment Evaluation", 0, 1, "C")
     pdf.ln(5)
     
+    # Student Info
     pdf.set_font("Arial", "", 11)
     pdf.cell(0, 7, f"Student Name: {student_name}", 0, 1)
     pdf.cell(0, 7, f"Student ID: {student_id}", 0, 1)
-    pdf.cell(0, 7, f"Module: {module}", 0, 1)
+    pdf.cell(0, 7, f"Unit Title: {unit_title}", 0, 1)
     pdf.cell(0, 7, f"Date: {datetime.now().strftime('%Y-%m-%d')}", 0, 1)
     pdf.ln(5)
     
+    # Overall Grade
     pdf.set_font("Arial", "B", 14)
     pdf.set_fill_color(220, 220, 220)
-    pdf.cell(0, 10, f"Final Grade: {grade} ({total_score:.1f}/100)", 0, 1, "C", True)
+    grade = evaluation.get("grade", "Ungraded")
+    total = evaluation.get("total_score", 0)
+    percentage = evaluation.get("percentage", 0)
+    pdf.cell(0, 10, f"Final Grade: {grade} ({total}/220 = {percentage}%)", 0, 1, "C", True)
     pdf.ln(5)
     
+    # Learning Outcomes
     pdf.set_font("Arial", "B", 12)
-    pdf.cell(0, 8, "Detailed Evaluation:", 0, 1)
+    pdf.cell(0, 8, "Learning Outcomes Assessment:", 0, 1)
     pdf.ln(2)
     
-    criteria_weights = {
-        "Content": "30%",
-        "Theory": "25%",
-        "Understanding": "25%",
-        "Presentation": "20%"
-    }
+    for lo in evaluation.get("learning_outcomes", []):
+        pdf.set_font("Arial", "B", 10)
+        achieved = "✓ ACHIEVED" if lo.get("achieved") == "Y" else "✗ NOT ACHIEVED"
+        pdf.cell(0, 6, f"{achieved}: {lo.get('outcome', 'N/A')[:80]}", 0, 1)
+        pdf.set_font("Arial", "", 9)
+        pdf.multi_cell(0, 5, f"Evidence: {lo.get('evidence', 'N/A')[:150]}")
+        pdf.ln(2)
     
-    for criterion, weight in criteria_weights.items():
-        if criterion in evaluation:
-            data = evaluation[criterion]
+    # Rubric Scores
+    pdf.ln(3)
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 8, "Qualifi Marking Rubric Scores:", 0, 1)
+    pdf.ln(2)
+    
+    for criterion, max_score in QUALIFI_RUBRIC.items():
+        if criterion in evaluation.get("rubric_scores", {}):
+            data = evaluation["rubric_scores"][criterion]
+            score = data.get("score", 0)
+            pdf.set_font("Arial", "B", 10)
+            pdf.cell(0, 6, f"{criterion}: {score}/{max_score}", 0, 1)
+            pdf.set_font("Arial", "", 9)
+            pdf.multi_cell(0, 5, data.get("feedback", "N/A")[:200])
             pdf.ln(2)
-            pdf.set_font("Arial", "B", 11)
-            pdf.cell(0, 7, f"{criterion} ({weight}): {data.get('score', 0)}/100 [{data.get('band', 'N/A')}]", 0, 1)
-            pdf.set_font("Arial", "", 10)
-            pdf.multi_cell(0, 6, f"Weighted Score: {data.get('weighted', 0):.2f} | {data.get('feedback', 'N/A')}")
+    
+    # Overall Feedback
+    pdf.ln(3)
+    pdf.set_font("Arial", "B", 11)
+    pdf.cell(0, 7, "Overall Feedback:", 0, 1)
+    pdf.set_font("Arial", "", 10)
+    pdf.multi_cell(0, 6, evaluation.get("overall_feedback", "N/A"))
     
     filename = f"tmp/qualifi-pdfs/{student_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
     pdf.output(filename)
@@ -187,17 +254,17 @@ async def root():
 async def evaluate_assignment(
     student_name: str = Form(...),
     student_id: str = Form(...),
-    module: str = Form(...),
+    unit_title: str = Form(...),
     rubric: UploadFile = File(...),
     assignment: UploadFile = File(...)
 ):
     try:
-        # Read rubric file
+        # Read rubric file (extract summative criteria only)
         rubric_content = await rubric.read()
         rubric_text = parse_rubric_file(rubric_content, rubric.filename)
         
         if not rubric_text:
-            raise HTTPException(status_code=400, detail="Unable to parse rubric file. Please upload a text-based file.")
+            raise HTTPException(status_code=400, detail="Unable to parse rubric file. Please upload a valid text-based rubric.")
         
         # Read assignment file
         assignment_content = await assignment.read()
@@ -206,26 +273,17 @@ async def evaluate_assignment(
         if len(assignment_text.strip()) < 50:
             raise HTTPException(status_code=400, detail="Assignment text too short")
         
-        # Evaluate using uploaded rubric
-        evaluation = await evaluate_with_gemini(assignment_text, rubric_text, module)
+        # Evaluate using Qualifi rubric
+        evaluation = await evaluate_with_gemini(assignment_text, rubric_text, unit_title)
         
-        # Calculate total safely
-        total_score = 0
-        for key in ["Content", "Theory", "Understanding", "Presentation"]:
-            if key in evaluation and isinstance(evaluation[key], dict):
-                total_score += evaluation[key].get("weighted", 0)
-        
-        grade = calculate_grade(total_score)
-        
-        pdf_path = generate_pdf(student_name, student_id, module, evaluation, total_score, grade)
+        # Generate PDF report
+        pdf_path = generate_pdf(student_name, student_id, unit_title, evaluation)
         
         return JSONResponse({
             "success": True,
             "student_name": student_name,
             "student_id": student_id,
-            "module": module,
-            "total_score": round(total_score, 2),
-            "grade": grade,
+            "unit_title": unit_title,
             "evaluation": evaluation,
             "pdf_url": f"/download/{os.path.basename(pdf_path)}"
         })
@@ -243,9 +301,5 @@ async def download_pdf(filename: str):
         return FileResponse(file_path, filename=filename)
     raise HTTPException(status_code=404, detail="File not found")
 
-@app.get("/api/modules")
-async def get_modules():
-    return {"modules": MODULES}
-
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
