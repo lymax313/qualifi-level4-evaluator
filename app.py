@@ -401,6 +401,37 @@ def generate_pdf(student_name: str, student_id: str, unit_title: str, evaluation
         "C",
     )
     ...
+def generate_pdf(student_name: str, student_id: str, unit_title: str, evaluation: dict) -> str:
+    pdf = FPDF()
+    pdf.add_page()
+
+    # Header
+    pdf.set_font("Arial", "B", 16)
+    pdf.cell(
+        0,
+        10,
+        sanitize_text("QUALIFI LEVEL 4 DIPLOMA IN AI - EVALUATION REPORT"),
+        0,
+        1,
+        "C",
+    )
+    pdf.ln(5)
+
+    # Student info
+    pdf.set_font("Arial", "", 11)
+    pdf.cell(100, 7, sanitize_text(f"Student Name: {student_name}"), 0, 0)
+    pdf.cell(0, 7, sanitize_text(f"Student ID: {student_id}"), 0, 1)
+    pdf.cell(0, 7, sanitize_text(f"Unit: {unit_title}"), 0, 1)
+    pdf.cell(
+        0,
+        7,
+        sanitize_text(f"Date: {datetime.now().strftime('%Y-%m-%d')}"),
+        0,
+        1,
+    )
+    pdf.ln(5)
+
+    # ... rest of generate_pdf with pdf.* calls ...
 
 
 for s in evaluation.get("strengths", []):
