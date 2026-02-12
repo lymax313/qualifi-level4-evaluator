@@ -9,6 +9,10 @@ from datetime import datetime
 from fpdf import FPDF
 import logging
 
+def sanitize_text(text: str) -> str:
+    # Replace characters not supported by core fonts with a safe placeholder
+    return text.encode("latin-1", "replace").decode("latin-1")
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
