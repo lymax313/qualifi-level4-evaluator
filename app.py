@@ -9,6 +9,8 @@ import re
 from datetime import datetime
 from fpdf import FPDF
 import logging
+from PIL import Image
+import io
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -99,7 +101,7 @@ async def evaluate_with_gemini(assignment_text: str, module: str) -> dict:
         if not GEMINI_API_KEY:
             return generate_fallback_evaluation(assignment_text)
         
-        model = genai.GenerativeModel('gemini-pro')
+        model = genai.GenerativeModel('gemini-1.5-flash')
         
         prompt = f"""You are a Qualifi Level 4 academic evaluator. Strictly follow the grading rubric.
 
@@ -227,6 +229,28 @@ async def evaluate_assignment(
     try:
         content = await assignment.read()
         assignment_text = content.decode('utf-8', errors='ignore')
+                
+        # Check if assignment is an image file
+        file_extension = assignment.filename.lower().split('.')[-1] if assignment.filename else ''
+        
+        if file_extension in ['png', 'jpg', 'jpeg']:
+            # Handle image file with Gemini Vision
+            img_bytes = await assignment.read()
+            img = Image.open(io.BytesIO(img_bytes))
+            
+            # Use Gemini Vision to extract text from image
+            if not GEMINI_API_KEY:
+                assignment_text = "Image upload requires API key."
+            else:
+                model = genai.GenerativeModel('gemini-1.5-flash')
+                response = model.generate_content([
+                    "Extract all text content from this image. Provide a clean, accurate transcription.",
+                    img
+                ])
+                assignment_text = response.text
+        else:
+                        content = await assignment.read()
+            assignment_text = content.decode('utf-8', errors='ignore')
         
         if len(assignment_text.strip()) < 50:
             raise HTTPException(status_code=400, detail="Assignment text too short")
