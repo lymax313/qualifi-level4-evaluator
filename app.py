@@ -353,12 +353,43 @@ async def evaluate_assignment(
         logger.error(f\"API error: {str(e)}\")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get(\"/download/{{filename}}\")
+from fastapi.responses import JSONResponse, FileResponse
+import os
+import uvicorn
+
+# ... your existing code above ...
+
+    try:
+        rubric_content = await rubric.read()
+        rubric_text = parse_rubric_file(rubric_content, rubric.filename)
+
+        assignment_content = await assignment.read()
+        assignment_text = assignment_content.decode("utf-8", errors="ignore")
+
+        evaluation = await evaluate_with_gemini(assignment_text, rubric_text, unit_title)
+        pdf_path = generate_pdf(student_name, student_id, unit_title, evaluation)
+
+        return JSONResponse({
+            "success": True,
+            "data": evaluation,
+            "pdf_url": f"/download/{os.path.basename(pdf_path)}"
+        })
+    except Exception as e:
+        logger.error(f"API error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/download/{filename}")
 async def download_file(filename: str):
-    path = f\"tmp/qualifi-pdfs/{{filename}}\"
+    path = f"/tmp/qualifi-pdfs/{filename}"
     if os.path.exists(path):
         return FileResponse(path)
-    return JSONResponse({\"error\": \"File not found\"}, status_code=404)
+    return JSONResponse({"error": "File not found"}, status_code=404)
 
-if __name__ == \"__main__\":
-    uvicorn.run(app, host=\"0.0.0.0\", port=int(os.getenv(\"PORT\", 10000)))
+
+if __name__ == "__main__":
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", "10000"))
+    )
