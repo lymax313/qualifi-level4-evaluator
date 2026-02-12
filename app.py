@@ -1,8 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
-from google import genai
-from google.genai import types
 import uvicorn
 import os
 import json
@@ -13,17 +11,6 @@ import logging
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# --- Gemini client setup -----------------------------------------------------
-
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-
-if not GEMINI_API_KEY:
-    logger.warning("GEMINI_API_KEY is not set – app will use fallback evaluations only")
-
-client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
-
-# --- FastAPI app -------------------------------------------------------------
 
 app = FastAPI(title="Qualifi Level 4 Evaluator", version="6.0.0")
 
@@ -108,8 +95,6 @@ UNIT_CRITERIA = {
     ],
 }
 
-# --- Helpers -----------------------------------------------------------------
-
 
 def parse_rubric_file(content: bytes, filename: str) -> str | None:
     """Parse rubric from uploaded file, focusing on summative parts."""
@@ -139,140 +124,168 @@ def calculate_grade(percentage: float) -> str:
     return "Ungraded"
 
 
-def generate_fallback_evaluation(reason: str) -> dict:
-    logger.error(f"Using fallback evaluation. Reason: {reason}")
-    return {
-        "mark_breakdown": {
-            k: {"score": 20, "justification": "Fallback due to system error"}
-            for k in QUALIFI_RUBRIC.keys()
-        },
-        "total_score": 100,
-        "percentage": 45.5,
-        "grade": "Pass",
-        "criteria_feedback": [],
-        "overall_feedback": "A system error occurred during AI evaluation. Please review manually.",
-        "strengths": [],
-        "improvements": [],
-        "evaluation": {},
+def feedback_for_score(score: int, max_score: int, area: str) -> str:
+    """Return a canned comment based on score band for a rubric area."""
+    ratio = score / max_score if max_score else 0
+    if ratio >= 0.8:
+        return (
+            f"In {area}, the learner demonstrates consistently strong performance with "
+            "clear, relevant coverage aligned to the assessment expectations."
+        )
+    elif ratio >= 0.6:
+        return (
+            f"In {area}, the learner meets most expectations but would benefit from "
+            "deeper analysis and more specific supporting examples."
+        )
+    elif ratio >= 0.4:
+        return (
+            f"In {area}, the learner shows partial achievement; key points are either "
+            "missing or under‑developed and should be expanded."
+        )
+    else:
+        return (
+            f"In {area}, the learner provides limited evidence and needs substantial "
+            "improvement to meet the required standard."
+        )
+
+
+def evaluate_locally(assignment_text: str, rubric_text: str | None, unit_title: str) -> dict:
+    """
+    Simple heuristic evaluator, fully local (no API):
+    - Scores based on word count, basic keyword presence, and formatting.
+    - Generates banded justifications, overall feedback, strengths, improvements.
+    """
+    text_lower = assignment_text.lower()
+    words = assignment_text.split()
+    word_count = len(words)
+
+    # Content & knowledge – more words => higher scores (up to max)
+    content_score = min(QUALIFI_RUBRIC["Content"], int(word_count / 40))
+    knowledge_score = min(QUALIFI_RUBRIC["Knowledge and Understanding"], int(word_count / 40))
+
+    # Application of theory – count basic theoretical keywords
+    theory_keywords = ["theory", "model", "framework", "research", "study", "literature"]
+    theory_hits = sum(text_lower.count(k) for k in theory_keywords)
+    application_score = min(
+        QUALIFI_RUBRIC["Application of Theory and Literature"],
+        10 + theory_hits * 3,
+    )
+
+    # Referencing – look for urls and parentheses as crude citations
+    ref_hits = text_lower.count("http") + text_lower.count("www")
+    ref_hits += assignment_text.count("(")
+    referencing_score = min(
+        QUALIFI_RUBRIC["Referencing"],
+        10 + ref_hits * 2,
+    )
+
+    # Presentation – based on average words per line
+    line_count = assignment_text.count("\n") + 1
+    avg_words_per_line = word_count / max(line_count, 1)
+    if avg_words_per_line < 8:
+        presentation_score = 20
+    elif avg_words_per_line < 15:
+        presentation_score = 30
+    else:
+        presentation_score = QUALIFI_RUBRIC["Presentation/Writing Skills"]
+
+    mark_breakdown = {
+        "Content": {"score": content_score},
+        "Application of Theory and Literature": {"score": application_score},
+        "Knowledge and Understanding": {"score": knowledge_score},
+        "Presentation/Writing Skills": {"score": presentation_score},
+        "Referencing": {"score": referencing_score},
     }
 
+    # Add justifications per area using templates
+    for area, max_score in QUALIFI_RUBRIC.items():
+        s = mark_breakdown[area]["score"]
+        mark_breakdown[area]["justification"] = feedback_for_score(s, max_score, area)
 
-async def evaluate_with_gemini(
-    assignment_text: str, rubric_text: str | None, unit_title: str
-) -> dict:
-    """Call Gemini and return a structured evaluation."""
-    if client is None:
-        return generate_fallback_evaluation("Gemini client not initialised (no API key)")
+    total_score = sum(mark_breakdown[k]["score"] for k in mark_breakdown)
+    percentage = round(total_score / 220 * 100, 1)
+    grade = calculate_grade(percentage)
 
-    try:
-        unit_code = "AID 401"
-        for code in UNIT_CRITERIA.keys():
-            if code in unit_title:
-                unit_code = code
-                break
+    # Unit code detection
+    unit_code = "AID 401"
+    for code in UNIT_CRITERIA.keys():
+        if code in unit_title:
+            unit_code = code
+            break
 
-        unit_specific_criteria = "\n".join(
-            f"- {c}" for c in UNIT_CRITERIA.get(unit_code, [])
+    # Criteria feedback using simple keyword match
+    criteria_feedback = []
+    for crit in UNIT_CRITERIA.get(unit_code, []):
+        key_words = [w.lower().strip(",.") for w in crit.split()[:4]]
+        achieved = all(kw in text_lower for kw in key_words)
+        criteria_feedback.append(
+            {
+                "criterion": crit,
+                "achieved": achieved,
+                "evidence": "The learner's response includes several key phrases related to this criterion."
+                if achieved
+                else "Key phrases for this criterion are limited or not clearly evidenced in the response.",
+                "improvement": "Add a focused paragraph that explicitly addresses this criterion with concrete examples.",
+            }
         )
 
-        rubric_snippet = (rubric_text or "")[:2000]
+    # Strengths and improvements lists (by area)
+    strengths = [
+        area
+        for area, data in mark_breakdown.items()
+        if data["score"] >= 0.7 * QUALIFI_RUBRIC[area]
+    ]
+    improvements = [
+        area
+        for area, data in mark_breakdown.items()
+        if data["score"] < 0.7 * QUALIFI_RUBRIC[area]
+    ]
 
-        # Ask Gemini for JSON directly. [web:30][web:35][web:38]
-        prompt = f"""You are an AI evaluator for the Qualifi Level 4 Diploma in Artificial Intelligence.
-You must mark ONLY the SUMMATIVE TASK for the specified unit: {unit_title}.
+    if strengths:
+        strengths_text = [
+            f"{area}: {mark_breakdown[area]['justification']}" for area in strengths
+        ]
+    else:
+        strengths_text = ["No particular strengths were identified; all areas require further development."]
 
-You are given:
-1) The unit assignment brief context: {rubric_snippet}
-2) The specific Assessment Criteria for this summative task:
-{unit_specific_criteria}
-3) The generic Qualifi Mark Scheme (Total 220 points):
-   - Content: 0–50
-   - Application of Theory and Literature: 0–40
-   - Knowledge and Understanding: 0–50
-   - Presentation/Writing Skills: 0–40
-   - Referencing: 0–40
+    if improvements:
+        improvements_text = [
+            f"{area}: {mark_breakdown[area]['justification']}" for area in improvements
+        ]
+    else:
+        improvements_text = ["All areas are currently performing at a strong level."]
 
-Return ONLY valid JSON using this schema:
-{{
-  "unit_code": "{unit_code}",
-  "mark_breakdown": {{
-    "Content": {{"score": 0, "justification": ""}},
-    "Application of Theory and Literature": {{"score": 0, "justification": ""}},
-    "Knowledge and Understanding": {{"score": 0, "justification": ""}},
-    "Presentation/Writing Skills": {{"score": 0, "justification": ""}},
-    "Referencing": {{"score": 0, "justification": ""}}
-  }},
-  "criteria_feedback": [
-    {{
-      "criterion": "Criterion text",
-      "achieved": true,
-      "evidence": "Evidence from text",
-      "improvement": "Actionable suggestion"
-    }}
-  ],
-  "overall_feedback": "",
-  "strengths": [],
-  "improvements": []
-}}
+    overall_feedback = (
+        "This evaluation has been generated using an automated rubric‑based scoring tool. "
+        "Scores reflect length, basic use of theoretical language, structure and evidence of referencing. "
+        "Learners and assessors should use the section comments to guide targeted improvements."
+    )
 
-LEARNER_ANSWER:
-{assignment_text[:6000]}
-"""
-
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json"
-            ),  # ask for JSON [web:35][web:38]
-        )
-
-        raw_text = (response.text or "").strip()
-        logger.info(f"Gemini raw response (first 400 chars): {raw_text[:400]}")
-
-        try:
-            evaluation = json.loads(raw_text)
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON decode error from Gemini: {e}")
-            return generate_fallback_evaluation("Gemini JSON decode error")
-
-        total_score = 0
-        for criterion, max_score in QUALIFI_RUBRIC.items():
-            if (
-                "mark_breakdown" in evaluation
-                and criterion in evaluation["mark_breakdown"]
-            ):
-                score = min(
-                    evaluation["mark_breakdown"][criterion].get("score", 0), max_score
-                )
-                evaluation["mark_breakdown"][criterion]["score"] = score
-                total_score += score
-
-        evaluation["total_score"] = total_score
-        evaluation["percentage"] = round((total_score / 220) * 100, 1)
-        evaluation["grade"] = calculate_grade(evaluation["percentage"])
-
-        evaluation.setdefault("criteria_feedback", [])
-        evaluation.setdefault("overall_feedback", "")
-        evaluation.setdefault("strengths", [])
-        evaluation.setdefault("improvements", [])
-        evaluation.setdefault("evaluation", {})
-
-        return evaluation
-
-    except Exception as e:
-        logger.error(f"Gemini evaluation error: {e}")
-        return generate_fallback_evaluation("Unexpected Gemini error")
+    evaluation = {
+        "unit_code": unit_code,
+        "mark_breakdown": mark_breakdown,
+        "total_score": total_score,
+        "percentage": percentage,
+        "grade": grade,
+        "criteria_feedback": criteria_feedback,
+        "overall_feedback": overall_feedback,
+        "strengths": strengths_text,
+        "improvements": improvements_text,
+        "evaluation": {},
+    }
+    return evaluation
 
 
 def generate_pdf(student_name: str, student_id: str, unit_title: str, evaluation: dict) -> str:
     pdf = FPDF()
     pdf.add_page()
 
+    # Header
     pdf.set_font("Arial", "B", 16)
     pdf.cell(0, 10, "QUALIFI LEVEL 4 DIPLOMA IN AI - EVALUATION REPORT", 0, 1, "C")
     pdf.ln(5)
 
+    # Student info
     pdf.set_font("Arial", "", 11)
     pdf.cell(100, 7, f"Student Name: {student_name}", 0, 0)
     pdf.cell(0, 7, f"Student ID: {student_id}", 0, 1)
@@ -280,14 +293,24 @@ def generate_pdf(student_name: str, student_id: str, unit_title: str, evaluation
     pdf.cell(0, 7, f"Date: {datetime.now().strftime('%Y-%m-%d')}", 0, 1)
     pdf.ln(5)
 
+    # Overall grade band
     pdf.set_font("Arial", "B", 14)
-    pdf.set_fill_color(240, 240, 240)
+    pdf.set_fill_color(220, 235, 255)
     grade = evaluation.get("grade", "N/A")
     score = evaluation.get("total_score", 0)
     perc = evaluation.get("percentage", 0)
-    pdf.cell(0, 12, f"FINAL GRADE: {grade} | SCORE: {score}/220 ({perc}%)", 1, 1, "C", True)
+    pdf.cell(
+        0,
+        12,
+        f"FINAL GRADE: {grade} | SCORE: {score}/220 ({perc}%)",
+        1,
+        1,
+        "C",
+        True,
+    )
     pdf.ln(5)
 
+    # Mark scheme breakdown
     pdf.set_font("Arial", "B", 12)
     pdf.cell(0, 8, "1. MARK SCHEME BREAKDOWN", 0, 1)
     pdf.set_font("Arial", "", 10)
@@ -299,9 +322,10 @@ def generate_pdf(student_name: str, student_id: str, unit_title: str, evaluation
         pdf.set_font("Arial", "B", 10)
         pdf.cell(0, 6, f"{crit} ({s}/{max_s})", 0, 1)
         pdf.set_font("Arial", "", 9)
-        pdf.multi_cell(0, 5, data.get("justification", "No justification provided."))
+        pdf.multi_cell(0, 5, data.get("justification", ""))
         pdf.ln(2)
 
+    # Criteria feedback
     pdf.ln(3)
     pdf.set_font("Arial", "B", 12)
     pdf.cell(0, 8, "2. ASSESSMENT CRITERIA FEEDBACK", 0, 1)
@@ -317,21 +341,23 @@ def generate_pdf(student_name: str, student_id: str, unit_title: str, evaluation
         pdf.multi_cell(0, 5, f"Improvement: {item.get('improvement', 'N/A')}")
         pdf.ln(2)
 
+    # Overall feedback
     pdf.ln(3)
     pdf.set_font("Arial", "B", 12)
     pdf.cell(0, 8, "3. OVERALL EVALUATION", 0, 1)
     pdf.set_font("Arial", "", 10)
     pdf.multi_cell(0, 6, evaluation.get("overall_feedback", "N/A"))
 
-    pdf.ln(2)
-    pdf.set_font("Arial", "B", 10)
+    # Strengths and improvements
+    pdf.ln(3)
+    pdf.set_font("Arial", "B", 11)
     pdf.cell(0, 6, "Key Strengths:", 0, 1)
     pdf.set_font("Arial", "", 10)
     for s in evaluation.get("strengths", []):
         pdf.multi_cell(0, 5, f"- {s}")
-
     pdf.ln(2)
-    pdf.set_font("Arial", "B", 10)
+
+    pdf.set_font("Arial", "B", 11)
     pdf.cell(0, 6, "Areas for Improvement:", 0, 1)
     pdf.set_font("Arial", "", 10)
     for i in evaluation.get("improvements", []):
@@ -340,8 +366,6 @@ def generate_pdf(student_name: str, student_id: str, unit_title: str, evaluation
     filename = f"tmp/qualifi-pdfs/{student_id}_{datetime.now().strftime('%Y%m%d%H%M')}.pdf"
     pdf.output(filename)
     return filename
-
-# --- Routes ------------------------------------------------------------------
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -368,7 +392,7 @@ async def evaluate_assignment(
         assignment_content = await assignment.read()
         assignment_text = assignment_content.decode("utf-8", errors="ignore")
 
-        evaluation = await evaluate_with_gemini(assignment_text, rubric_text, unit_title)
+        evaluation = evaluate_locally(assignment_text, rubric_text, unit_title)
         pdf_path = generate_pdf(student_name, student_id, unit_title, evaluation)
 
         return JSONResponse(
