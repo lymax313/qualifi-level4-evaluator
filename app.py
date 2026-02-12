@@ -215,7 +215,6 @@ def generate_pdf(student_name: str, student_id: str, unit_title: str, evaluation
         achieved = "[PASS] ACHIEVED" if lo.get("achieved") == "Y" else "[FAIL] NOT ACHIEVED"
         pdf.set_font("Arial", "", 9)
         pdf.cell(0, 6, f"{achieved}: {lo.get('outcome', 'N/A')[:80]}", 0, 1)
-                pdf.set_font("Arial", "", 9)
                 pdf.multi_cell(0, 5, f"Evidence: {lo.get('evidence', 'N/A')[:150]}")
         pdf.ln(2)
                     
