@@ -372,6 +372,28 @@ def generate_pdf(student_name: str, student_id: str, unit_title: str, evaluation
     return filename
 
 
+pdf.cell(100, 7, sanitize_text(f"Student Name: {student_name}"), 0, 0)
+pdf.cell(0, 7, sanitize_text(f"Student ID: {student_id}"), 0, 1)
+pdf.cell(0, 7, sanitize_text(f"Unit: {unit_title}"), 0, 1)
+
+...
+
+pdf.multi_cell(0, 5, sanitize_text(data.get("justification", "")))
+
+...
+
+pdf.multi_cell(0, 6, sanitize_text(evaluation.get("overall_feedback", "N/A")))
+
+...
+
+for s in evaluation.get("strengths", []):
+    pdf.multi_cell(0, 5, "- " + sanitize_text(s))
+
+for i in evaluation.get("improvements", []):
+    pdf.multi_cell(0, 5, "- " + sanitize_text(i))
+
+
+
 @app.get("/", response_class=HTMLResponse)
 async def root():
     try:
