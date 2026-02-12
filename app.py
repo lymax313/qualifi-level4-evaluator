@@ -17,7 +17,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
-app = FastAPI(title="Qualifi Level 4 Evaluator", version="3.0.0")
+app = FastAPI(title="Qualifi Level 4 Evaluator", version="4.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -29,46 +29,15 @@ app.add_middleware(
 
 os.makedirs("tmp/qualifi-pdfs", exist_ok=True)
 
-# Qualifi Rubric - Exact grading bands from PDF
-RUBRIC = """
-Qualifi Level 4 Assignment Evaluation Rubric:
-
-1. Content alignment with assessment criteria (30%):
-   - 80-100 (Distinction): Extensive evaluation and synthesis of ideas, substantial original thinking
-   - 70-79 (Distinction): Comprehensive critical evaluation and synthesis, coherent original thinking
-   - 60-69 (Merit): Adequate evaluation and synthesis beyond basic descriptions, original thinking
-   - 50-59 (Pass): Describes main ideas with evidence of evaluation, some original thinking
-   - 40-49 (Pass): Describes some main ideas but omits concepts, limited evaluation
-   - 30-39 (FAIL): Largely incomplete, misses key concepts, no original thinking
-   - 0-39 (FAIL): Inadequate or irrelevant information
-
-2. Application of Theory and Literature (25%):
-   - 80-100: In-depth, detailed, expertly integrates literature
-   - 70-79: Clear and relevant, fully integrates literature
-   - 60-69: Appropriate application, integrates literature
-   - 50-59: Adequate application, uses literature
-   - 40-49: Limited application, inconsistent literature use
-   - 30-39: Confused application, no literature support
-   - 0-39: Little or no evidence of theory application
-
-3. Knowledge and Understanding (25%):
-   - 80-100: Extensive depth beyond key principles
-   - 70-79: Comprehensive knowledge and depth
-   - 60-69: Sound understanding of principles
-   - 50-59: Basic knowledge of key concepts
-   - 40-49: Limited and superficial knowledge
-   - 30-39: Confused or inadequate knowledge
-   - 0-39: Little or no evidence of understanding
-
-4. Presentation and Writing Skills (20%):
-   - 80-100: Polished, exceeding expectations, error-free
-   - 70-79: Mastery, error-free mechanics
-   - 60-69: Logical structure, few errors
-   - 50-59: Orderly, minor errors
-   - 40-49: Somewhat weak, errors may interfere
-   - 30-39: Confused, errors often interfere
-   - 0-39: Illogical, significant errors
-"""
+# AI Modules
+MODULES = [
+    "DAI401 - Introduction to Artificial Intelligence and Applications",
+    "DAI402 - Mathematical Foundations for Machine Learning",
+    "DAI403 - Data Science Using Python",
+    "DAI404 - Big Data Management",
+    "DAI405 - Introduction to Deep Learning",
+    "DAI406 - Artificial Intelligence Ethics"
+]
 
 GRADE_BANDS = [
     {"name": "Distinction", "min": 70, "max": 100},
@@ -77,45 +46,46 @@ GRADE_BANDS = [
     {"name": "FAIL", "min": 0, "max": 39}
 ]
 
-MODULES = [
-    "SEM301DS - Strategic Management",
-    "SEM302DS - Project Management",
-    "SEM303DS - Financial Management",
-    "SEM304DS - Human Resource Management",
-    "SEM305DS - Marketing Management",
-    "SEM306DS - Operations Management",
-    "SEM307DS - Business Ethics",
-    "SEM308DS - Entrepreneurship",
-    "SEM309DS - Business Law",
-    "SEM310DS - International Business",
-    "SEM311DS - Research Methods",
-    "SEM312DS - Business Analytics",
-    "SEM313DS - Leadership",
-    "SEM314DS - Innovation Management"
-]
+def parse_rubric_file(content: bytes, filename: str) -> str:
+    """Parse rubric from uploaded file."""
+    try:
+        # Try decoding as text
+        rubric_text = content.decode('utf-8', errors='ignore')
+        if len(rubric_text.strip()) > 20:
+            return rubric_text
+        return None
+    except Exception as e:
+        logger.error(f"Rubric parsing error: {str(e)}")
+        return None
 
-async def evaluate_with_gemini(assignment_text: str, module: str) -> dict:
+async def evaluate_with_gemini(assignment_text: str, rubric_text: str, module: str) -> dict:
+    """Evaluate assignment using uploaded rubric."""
     try:
         if not GEMINI_API_KEY:
-            return generate_fallback_evaluation(assignment_text)
+            return generate_fallback_evaluation()
+        
+        if not rubric_text or len(rubric_text.strip()) < 20:
+            return generate_fallback_evaluation()
         
         model = genai.GenerativeModel('gemini-pro')
         
-        prompt = f"""You are a Qualifi Level 4 academic evaluator. Strictly follow the grading rubric.
+        prompt = f"""You are a Qualifi Level 4 academic evaluator.
 
 Module: {module}
 
-{RUBRIC}
+RUBRIC/ASSESSMENT CRITERIA:
+{rubric_text[:2000]}
 
-Evaluate this assignment strictly according to the rubric above.
-For each criterion, select the appropriate grade band (80-100, 70-79, 60-69, 50-59, 40-49, 30-39, 0-39) based on the descriptors.
+Evaluate this assignment STRICTLY according to the rubric criteria provided above.
+For each criterion in the rubric, assess the student's work and provide:
+1. Score (0-100)
+2. Grade band (Pass/Merit/Distinction/FAIL)
+3. Detailed feedback with evidence
 
 Assignment:
 {assignment_text[:4000]}
 
-Provide scores STRICTLY following the rubric bands and detailed feedback.
-
-Return ONLY valid JSON:
+Return ONLY valid JSON in this exact format:
 {{
     "Content": {{"score": <number>, "band": "<band>", "feedback": "<text>"}},
     "Theory": {{"score": <number>, "band": "<band>", "feedback": "<text>"}},
@@ -127,40 +97,35 @@ Return ONLY valid JSON:
         response = model.generate_content(prompt)
         result_text = response.text.strip()
         
+        # Extract JSON
         json_match = re.search(r'\{.*\}', result_text, re.DOTALL)
         if json_match:
             evaluation = json.loads(json_match.group())
             
-            # Normalize scores to rubric weights
-            evaluation["Content"]["weighted"] = evaluation["Content"]["score"] * 0.30
-            evaluation["Theory"]["weighted"] = evaluation["Theory"]["score"] * 0.25
-            evaluation["Understanding"]["weighted"] = evaluation["Understanding"]["score"] * 0.25
-            evaluation["Presentation"]["weighted"] = evaluation["Presentation"]["score"] * 0.20
+            # Safely calculate weights
+            for key in ["Content", "Theory", "Understanding", "Presentation"]:
+                if key in evaluation and isinstance(evaluation[key], dict):
+                    score = evaluation[key].get("score", 50)
+                    weight = {"Content": 0.30, "Theory": 0.25, "Understanding": 0.25, "Presentation": 0.20}.get(key, 0.25)
+                    evaluation[key]["weighted"] = score * weight
+                else:
+                    evaluation[key] = {"score": 50, "band": "50-59", "weighted": 12.5, "feedback": "No data"}
             
             return evaluation
         else:
-            return generate_fallback_evaluation(assignment_text)
-    
+            return generate_fallback_evaluation()
+        
     except Exception as e:
         logger.error(f"Gemini error: {str(e)}")
-        return generate_fallback_evaluation(assignment_text)
+        return generate_fallback_evaluation()
 
-def generate_fallback_evaluation(assignment_text: str) -> dict:
-    word_count = len(assignment_text.split())
-    
-    if word_count < 100:
-        return {
-            "Content": {"score": 35, "band": "30-39", "weighted": 10.5, "feedback": "Insufficient content provided."},
-            "Theory": {"score": 32, "band": "30-39", "weighted": 8.0, "feedback": "Limited theoretical application."},
-            "Understanding": {"score": 35, "band": "30-39", "weighted": 8.75, "feedback": "Basic understanding demonstrated."},
-            "Presentation": {"score": 38, "band": "30-39", "weighted": 7.6, "feedback": "Brief presentation."}
-        }
-    
+def generate_fallback_evaluation() -> dict:
+    """Fallback evaluation when Gemini fails."""
     return {
-        "Content": {"score": 62, "band": "60-69", "weighted": 18.6, "feedback": "Adequate coverage of content areas."},
-        "Theory": {"score": 58, "band": "50-59", "weighted": 14.5, "feedback": "Adequate theoretical framework."},
-        "Understanding": {"score": 64, "band": "60-69", "weighted": 16.0, "feedback": "Sound understanding of concepts."},
-        "Presentation": {"score": 55, "band": "50-59", "weighted": 11.0, "feedback": "Orderly presentation."}
+        "Content": {"score": 55, "band": "50-59", "weighted": 16.5, "feedback": "Unable to fully evaluate. Please review manually."},
+        "Theory": {"score": 55, "band": "50-59", "weighted": 13.75, "feedback": "Unable to fully evaluate. Please review manually."},
+        "Understanding": {"score": 55, "band": "50-59", "weighted": 13.75, "feedback": "Unable to fully evaluate. Please review manually."},
+        "Presentation": {"score": 55, "band": "50-59", "weighted": 11.0, "feedback": "Unable to fully evaluate. Please review manually."}
     }
 
 def calculate_grade(total_score: float) -> str:
@@ -201,12 +166,13 @@ def generate_pdf(student_name: str, student_id: str, module: str, evaluation: di
     }
     
     for criterion, weight in criteria_weights.items():
-        data = evaluation[criterion]
-        pdf.ln(2)
-        pdf.set_font("Arial", "B", 11)
-        pdf.cell(0, 7, f"{criterion} ({weight}): {data['score']}/100 [{data.get('band', 'N/A')}]", 0, 1)
-        pdf.set_font("Arial", "", 10)
-        pdf.multi_cell(0, 6, f"Weighted Score: {data['weighted']:.2f} | {data['feedback']}")
+        if criterion in evaluation:
+            data = evaluation[criterion]
+            pdf.ln(2)
+            pdf.set_font("Arial", "B", 11)
+            pdf.cell(0, 7, f"{criterion} ({weight}): {data.get('score', 0)}/100 [{data.get('band', 'N/A')}]", 0, 1)
+            pdf.set_font("Arial", "", 10)
+            pdf.multi_cell(0, 6, f"Weighted Score: {data.get('weighted', 0):.2f} | {data.get('feedback', 'N/A')}")
     
     filename = f"tmp/qualifi-pdfs/{student_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
     pdf.output(filename)
@@ -222,17 +188,33 @@ async def evaluate_assignment(
     student_name: str = Form(...),
     student_id: str = Form(...),
     module: str = Form(...),
+    rubric: UploadFile = File(...),
     assignment: UploadFile = File(...)
 ):
     try:
-        content = await assignment.read()
-        assignment_text = content.decode('utf-8', errors='ignore')
+        # Read rubric file
+        rubric_content = await rubric.read()
+        rubric_text = parse_rubric_file(rubric_content, rubric.filename)
+        
+        if not rubric_text:
+            raise HTTPException(status_code=400, detail="Unable to parse rubric file. Please upload a text-based file.")
+        
+        # Read assignment file
+        assignment_content = await assignment.read()
+        assignment_text = assignment_content.decode('utf-8', errors='ignore')
         
         if len(assignment_text.strip()) < 50:
             raise HTTPException(status_code=400, detail="Assignment text too short")
         
-        evaluation = await evaluate_with_gemini(assignment_text, module)
-        total_score = sum(data["weighted"] for data in evaluation.values())
+        # Evaluate using uploaded rubric
+        evaluation = await evaluate_with_gemini(assignment_text, rubric_text, module)
+        
+        # Calculate total safely
+        total_score = 0
+        for key in ["Content", "Theory", "Understanding", "Presentation"]:
+            if key in evaluation and isinstance(evaluation[key], dict):
+                total_score += evaluation[key].get("weighted", 0)
+        
         grade = calculate_grade(total_score)
         
         pdf_path = generate_pdf(student_name, student_id, module, evaluation, total_score, grade)
@@ -247,10 +229,12 @@ async def evaluate_assignment(
             "evaluation": evaluation,
             "pdf_url": f"/download/{os.path.basename(pdf_path)}"
         })
-    
+        
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Evaluation error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Evaluation failed: {str(e)}")
 
 @app.get("/download/{filename}")
 async def download_pdf(filename: str):
